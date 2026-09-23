@@ -31,6 +31,25 @@ def _str(v) -> str:
     return v if isinstance(v, str) else ""
 
 
+def note_label(note: str) -> str:
+    """text.assess가 남긴 사유 코드(';'로 여러 개)를 리포트용 문구로."""
+    parts = []
+    for code in filter(None, note.split(";")):
+        kind, _, value = code.partition(":")
+        labels = {
+            "note": "재무제표 주석으로 시작",
+            "wrong_item": f"다른 항목(Item {value.upper()})이 추출됨",
+            "financial_statement": "재무제표로 시작",
+            "toc": "목차·상호참조 색인 형식",
+            "duplicate": f"{value} 섹션과 내용 중복",
+            "chars": f"정제 후 {int(value):,}자" if value.isdigit() else code,
+            "no_heading": "제목 줄 없음",
+            "cut": f"Item {value.upper()} 제목에서 자름",
+        }
+        parts.append(labels.get(kind, code))
+    return ", ".join(parts)
+
+
 def _table(headers: list[str], rows: list[list]) -> str:
     lines = ["| " + " | ".join(headers) + " |", "|" + "---|" * len(headers)]
     lines += ["| " + " | ".join(_fmt(c) for c in row) + " |" for row in rows]
@@ -72,7 +91,7 @@ def build_report(cfg: Config, metrics: dict, docs: pd.DataFrame, universe: pd.Da
     counts = docs.groupby(["section", "status"]).size().unstack(fill_value=0)
     rows = [[sec] + [int(counts.loc[sec].get(s, 0)) for s in STATUSES] for sec in counts.index]
     out += [_table(["섹션", *STATUSES], rows), ""]
-    bad = docs[docs["status"] != "ok"].sort_values(["status", "ticker"])
+    bad = docs[docs["status"] != "ok"].sort_values(["status", "section", "ticker"])
     if len(bad):
         out += ["분석에서 제외된 문서:", ""]
         rows = [
@@ -81,11 +100,24 @@ def build_report(cfg: Config, metrics: dict, docs: pd.DataFrame, universe: pd.Da
                 _str(r.company) or _str(r.name),
                 r.section,
                 r.status,
-                (_str(r.error) or _str(r.first_line))[:90].replace("|", "/"),
+                note_label(_str(getattr(r, "note", None))),
+                (_str(r.error) or _str(r.first_line))[:80].replace("|", "/"),
             ]
             for r in bad.itertuples()
         ]
-        out += [_table(["티커", "회사", "섹션", "상태", "첫 줄 / 오류"], rows), ""]
+        out += [_table(["티커", "회사", "섹션", "상태", "사유", "첫 줄 / 오류"], rows), ""]
+    if "note" in docs.columns:
+        ok_notes = docs.loc[docs["status"] == "ok", "note"].fillna("")
+        n_no_heading = int(ok_notes.str.contains("no_heading").sum())
+        n_cut = int(ok_notes.str.contains("cut:").sum())
+        if n_no_heading or n_cut:
+            out += [
+                "분석에 포함했지만 확인해 볼 만한 문서 (`documents.parquet`의 `note` 컬럼):",
+                "",
+                f"- 섹션 제목 줄을 못 찾았지만 다른 이상 신호가 없는 문서: {n_no_heading}건",
+                f"- 본문 중간의 다음 항목 제목(예: Item 1A)에서 잘라낸 문서: {n_cut}건",
+                "",
+            ]
 
     # 2. 산업분류 재현
     out += [

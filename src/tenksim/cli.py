@@ -8,7 +8,7 @@ import sys
 import textwrap
 
 import numpy as np
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 
 from . import pipeline
 from .config import Config, load_config
@@ -117,7 +117,8 @@ def cmd_explain(cfg: Config, args) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
-    load_dotenv()
+    # 설치 위치가 아니라 명령을 실행한 폴더에서 .env를 찾는다
+    load_dotenv(find_dotenv(usecwd=True))
     # Windows 콘솔(cp949)에서 회사명의 특수문자 때문에 죽지 않도록
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(errors="replace")

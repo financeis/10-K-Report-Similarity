@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -29,7 +30,7 @@ from .returns import (
     random_baseline,
 )
 from .similarity import cosine_matrix, pair_percentiles, pool_chunks, top_k
-from .text import assess, chunk_text, clean_section
+from .text import CleanedSection, assess, chunk_text, clean_section, duplicate_share
 from .universe import build_universe
 
 log = logging.getLogger(__name__)
@@ -65,18 +66,40 @@ def stage_ingest(cfg: Config, universe: pd.DataFrame, *, refresh: bool = False) 
 
 def stage_documents(cfg: Config, universe: pd.DataFrame, records: pd.DataFrame) -> pd.DataFrame:
     """원문을 정제하고 분석에 쓸 수 있는지 판정한다."""
-    rows = []
-    for rec in records.to_dict("records"):
-        cleaned = None
+    recs = records.to_dict("records")
+    cleaned_by_cik: dict[int, dict[str, CleanedSection]] = defaultdict(dict)
+    for rec in recs:
         if rec["status"] == "fetched":
-            cleaned = clean_section(
+            cleaned_by_cik[rec["cik"]][rec["section"]] = clean_section(
                 rec["text_raw"],
                 rec["section"],
                 drop_page_markers=cfg.text.drop_page_markers,
                 drop_table_rows=cfg.text.drop_table_rows,
             )
+    rows = []
+    for rec in recs:
+        sections = cleaned_by_cik.get(rec["cik"], {})
+        cleaned = sections.get(rec["section"])
+        # 두 섹션이 같은 줄을 절반 넘게 공유하면 한쪽이 잘못 잘린 것이다.
+        # 어느 쪽이 틀렸는지는 알 수 없으므로 둘 다 뺀다.
+        duplicate_of = next(
+            (
+                name
+                for name, other in sections.items()
+                if cleaned is not None
+                and name != rec["section"]
+                and max(
+                    duplicate_share(cleaned.text, other.text),
+                    duplicate_share(other.text, cleaned.text),
+                )
+                > 0.5
+            ),
+            None,
+        )
         row = {k: v for k, v in rec.items() if k != "text_raw"}
-        row["status"] = assess(rec["status"], cleaned, cfg.text.min_chars)
+        row["status"], row["note"] = assess(
+            rec["status"], cleaned, cfg.text.min_chars, duplicate_of
+        )
         row["first_line"] = cleaned.first_line if cleaned else None
         row["n_chars_raw"] = cleaned.n_chars_raw if cleaned else 0
         row["n_chars"] = len(cleaned.text) if cleaned else 0

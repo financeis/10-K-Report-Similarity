@@ -2,7 +2,15 @@ import time
 
 import pytest
 
-from tenksim.text import assess, chunk_text, clean_section, is_page_marker, is_table_row
+from tenksim.text import (
+    assess,
+    chunk_text,
+    clean_section,
+    duplicate_share,
+    is_page_marker,
+    is_table_row,
+    item_token,
+)
 
 
 def word_count(text: str) -> int:
@@ -106,33 +114,125 @@ def test_ge_like_extraction_is_suspect():
     c = clean_section(raw, "business")
     assert not c.heading_ok
     assert c.starts_with_note
-    assert assess("fetched", c, min_chars=100) == "suspect"
+    assert assess("fetched", c, min_chars=100) == ("suspect", "note")
+
+
+BODY = "\n" + "We design, manufacture and sell products to customers worldwide. " * 60
+
+
+# S&P 500 2024년 10-K에서 실제로 나온 제목 형태들
+@pytest.mark.parametrize(
+    "head, section, heading_ok, wrong_item",
+    [
+        ("ITEM 1. BUSINESS", "business", True, None),
+        ("Item 1: Business", "business", True, None),
+        ("Items 1 and 2. Business and Properties", "business", True, None),
+        ("Part I Item 1", "business", True, None),
+        ("ITEM I. BUSINESS", "business", True, None),
+        ("OUR BUSINESS", "business", True, None),
+        ("(Dollars in millions except per share data)\nItem 1. Business", "business", True, None),
+        ("Forward-Looking Statements", "business", False, None),
+        ("Item 1C. Cybersecurity", "business", False, "1c"),
+        ("Item 1A. Risk Factors", "business", False, "1a"),
+        ("Item 1A. Risk Factors", "risk_factors", True, None),
+        ("ITEM 1(A). RISK FACTORS", "risk_factors", True, None),
+        ("Item 1(a) | Risk Factors", "risk_factors", True, None),
+        ("PART IItem 1A", "risk_factors", True, None),
+        ("RISK FACTORS. The following discussion", "risk_factors", True, None),
+        ("Item 1. Business", "risk_factors", False, "1"),
+    ],
+)
+def test_heading_detection(head, section, heading_ok, wrong_item):
+    c = clean_section(head + BODY, section)
+    assert c.heading_ok is heading_ok
+    assert c.wrong_item == wrong_item
+    if heading_ok:
+        assert c.text.startswith("We design")  # 제목 줄(과 그 앞 머리글)은 지운다
+
+
+def test_financial_statements_and_toc_are_suspect():
+    glw = clean_section(
+        "Consolidated Statements of Income\nNet sales\nCost of sales" + BODY, "business"
+    )
+    assert assess("fetched", glw, 100) == ("suspect", "financial_statement")
+    # Intel처럼 'Form 10-K 상호참조 색인' 표를 Item 1로 돌려준 경우
+    index = "\n".join(
+        f"Item {n}. Something Pages {p}-{p + 5}"
+        for n, p in [("1A", 48), ("2", 14), ("3", 108), ("7", 21), ("8", 70)]
+    )
+    intc = clean_section("Item Number Item\nPart I\nItem 1. Business:\n" + index + BODY, "business")
+    assert intc.toc_like
+    assert assess("fetched", intc, 100) == ("suspect", "toc")
 
 
 @pytest.mark.parametrize(
-    "first, section, ok",
+    "line, token",
     [
-        ("ITEM 1. BUSINESS", "business", True),
-        ("Item 1: Business", "business", True),
-        ("Items 1 and 2. Business and Properties", "business", True),
-        ("Item 1A. Risk Factors", "business", False),
-        ("Item 1A. Risk Factors", "risk_factors", True),
-        ("RISK FACTORS. The following discussion", "risk_factors", True),
-        ("Item 7. Management's Discussion", "risk_factors", False),
+        ("Item 1.A. Risk Factors", "1a"),
+        ("ITEM 1A — RISK FACTORS", "1a"),
+        ("Item 1 (a) Risk Factors", "1a"),
+        ("Item 1. A Letter to Shareholders", "1"),
+        ("Item 10. Directors", "10"),
+        ("Items in this report are unaudited", None),
     ],
 )
-def test_heading_detection(first, section, ok):
-    c = clean_section(first + "\n" + "Some text here. " * 100, section)
-    assert c.heading_ok is ok
+def test_item_token(line, token):
+    assert item_token(line) == token
+
+
+def test_business_is_cut_at_next_item_heading():
+    # Bloom Energy처럼 Item 1 뒤에 Item 1A 전체가 붙어 온 경우
+    raw = "Item 1. Business" + BODY + "\nITEM 1A — RISK FACTORS\nOur stock price may be volatile."
+    c = clean_section(raw, "business")
+    assert c.cut_at == "1a"
+    assert "volatile" not in c.text
+    assert assess("fetched", c, 100) == ("ok", "cut:1a")
+
+
+def test_sentence_fragments_do_not_cut():
+    # General Mills처럼 문장이 줄바꿈으로 잘게 끊겨 'Item 8'만 한 줄에 오는 경우
+    raw = (
+        "Item 1. Business\nSee the notes to the financial statements in\nItem 8\nof this report."
+        + BODY
+    )
+    c = clean_section(raw, "business")
+    assert c.cut_at is None
+    assert "We design" in c.text
+
+
+def test_repeated_short_lines_are_dropped_as_headers():
+    pages = [f"CSX CORPORATION\nWe run trains across {n} states in the east." for n in range(5)]
+    c = clean_section("Item 1. Business\n" + "\n".join(pages), "business")
+    assert "CSX CORPORATION" not in c.text
+    assert c.text.count("We run trains") == 5
+
+
+def test_duplicate_share():
+    risk = "\n".join(
+        f"Risk paragraph number {i} about shareholder activism and proxy contests."
+        for i in range(10)
+    )
+    business = "\n".join(
+        risk.split("\n")[:4]
+    )  # Devon Energy처럼 Item 1A의 일부가 Item 1로 들어온 경우
+    assert duplicate_share(business, risk) == 1.0
+    assert duplicate_share(risk, business) == 0.4
+    assert duplicate_share("short", risk) == 0.0
 
 
 def test_assess_statuses():
     good = clean_section("Item 1. Business\n" + "We sell things. " * 200, "business")
+    no_head = clean_section("Unless the context otherwise requires..." + BODY, "business")
     short = clean_section("Item 1. Business\nWe sell things.", "business")
-    assert assess("fetched", good, min_chars=1000) == "ok"
-    assert assess("fetched", short, min_chars=1000) == "too_short"
-    assert assess("missing", None, min_chars=1000) == "missing"
-    assert assess("error", None, min_chars=1000) == "error"
+    assert assess("fetched", good, min_chars=1000) == ("ok", None)
+    assert assess("fetched", no_head, min_chars=1000) == ("ok", "no_heading")
+    assert assess("fetched", short, min_chars=1000) == ("too_short", "chars:15")
+    assert assess("fetched", good, 1000, duplicate_of="risk_factors") == (
+        "suspect",
+        "duplicate:risk_factors",
+    )
+    assert assess("missing", None, min_chars=1000) == ("missing", None)
+    assert assess("error", None, min_chars=1000) == ("error", None)
 
 
 def test_chunk_text_respects_limit_and_keeps_all_words():

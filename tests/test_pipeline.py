@@ -181,3 +181,43 @@ def test_doc_tokens_limits_chunks_per_company(cfg, monkeypatch):
     result = pipeline.stage_methods(cfg, universe, docs)["fake"]
     per_company = result.chunks.groupby("cik")["n_tokens"].sum()
     assert (per_company <= 60).all()
+
+
+def test_overlapping_sections_are_both_excluded(cfg):
+    # Devon Energy처럼 Item 1 자리에 Item 1A의 일부가 들어온 경우
+    risk = "Item 1A. Risk Factors\n" + "\n".join(
+        f"Risk {i}: our results could be adversely affected by events we cannot control."
+        for i in range(40)
+    )
+    business = "Item 1. Business\n" + "\n".join(risk.split("\n")[1:30])
+    universe = pd.DataFrame(
+        [
+            {
+                "cik": 1,
+                "ticker": "DVN",
+                "name": "Devon",
+                "gics_sector": "Energy",
+                "gics_sub_industry": "E&P",
+            }
+        ]
+    )
+    base = {
+        "cik": 1,
+        "year": 2024,
+        "status": "fetched",
+        "error": None,
+        "company": "Devon",
+        "sic": "1311",
+    }
+    records = pd.DataFrame(
+        [
+            {**base, "section": "business", "text_raw": business},
+            {**base, "section": "risk_factors", "text_raw": risk},
+        ]
+    )
+    cfg.filings.sections = ["business", "risk_factors"]
+    cfg.run_dir.mkdir(parents=True)
+    docs = pipeline.stage_documents(cfg, universe, records).set_index("section")
+    assert docs.loc["business", "note"] == "duplicate:risk_factors"
+    assert docs.loc["risk_factors", "note"] == "duplicate:business"
+    assert (docs["status"] == "suspect").all()

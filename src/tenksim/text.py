@@ -1,9 +1,9 @@
 """섹션 원문 정제, 추출 품질 판정, 청킹.
 
 edgartools가 준 텍스트는 문단이 줄바꿈으로 나뉘어 있고 HTML 엔티티도 풀려 있다.
-남는 노이즈는 페이지 번호·머리글/꼬리말, 한 줄로 뭉개진 표, 섹션 제목이다.
-대소문자와 구두점은 그대로 둔다. 요즘 임베딩 모델은 자연문으로 학습돼서
-소문자화나 구두점 제거가 이득이 없고 정보만 잃는다.
+남는 노이즈는 페이지 번호·머리글/꼬리말, 한 줄로 뭉개진 표, 섹션 제목, 그리고
+경계를 놓쳐 뒤에 붙어 온 다음 항목이다. 대소문자와 구두점은 그대로 둔다.
+요즘 임베딩 모델은 자연문으로 학습돼서 소문자화나 구두점 제거가 이득이 없고 정보만 잃는다.
 """
 
 from __future__ import annotations
@@ -11,19 +11,38 @@ from __future__ import annotations
 import html
 import re
 import unicodedata
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 
 _TERMINAL_PUNCT = re.compile(r"[.!?:;\"”’)\]]$")
 _NUMBER = re.compile(r"\d[\d,.]*")
 _PAGE_NUMBER = re.compile(r"(page\s*)?[-–—]?\s*([a-z]{1,2}-)?\d{1,3}\s*[-–—]?", re.I)
-_RUNNING_HEADER = re.compile(r"(table of contents|index|part\s+[ivx]+\.?)", re.I)
+_RUNNING_HEADER = re.compile(
+    r"(tables?\s+of\s+contents?|index)(\s+to\s+financial\s+statements)?"
+    r"(\s+index\s+to\s+financial\s+statements)?|part\s+[ivx]+\.?",
+    re.I,
+)
 _FORM_FOOTER = re.compile(r"form\s+10-k", re.I)
 _NOTE_HEADING = re.compile(r"note\s+\d+\b", re.I)
-_SECTION_HEADINGS = {
-    "business": re.compile(r"(items?\s*1\b|business\b)", re.I),
-    "risk_factors": re.compile(r"(item\s*1a\b|risk\s+factors\b)", re.I),
+# 'Item 1.', 'ITEM I.', 'Item 1(a)', 'Item 1.A.', 'PART IItem 1A', 'Items 1 and 2' 같은 항목 제목
+_ITEM_HEADING = re.compile(
+    r"(?:part\s*[ivx]+\.?\s*)?items?\s*(\d{1,2}|[ivx]{1,4})"
+    r"(?:\.?\s*\(\s*([a-c])\s*\)|\.?([a-c]))?(?![a-z0-9])",
+    re.I,
+)
+_ROMAN = {"i": "1", "ii": "2", "iii": "3", "iv": "4", "v": "5", "vi": "6", "vii": "7", "viii": "8"}
+_EXPECTED_ITEM = {"business": "1", "risk_factors": "1a"}
+_NAME_HEADINGS = {
+    "business": re.compile(r"((our\s+)?business|description\s+of\s+business)\b", re.I),
+    "risk_factors": re.compile(r"(risk\s*factors|risks\b)", re.I),
 }
+_FINANCIAL_STATEMENT = re.compile(
+    r"(consolidated\s+)?(statements?\s+of\s+(income|operations|earnings|cash\s+flows|"
+    r"comprehensive|financial\s+position|changes)|balance\s+sheets?)",
+    re.I,
+)
+_TITLE_WORD = re.compile(r"[a-z]{4,}", re.I)
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
 
 
@@ -38,7 +57,23 @@ def is_page_marker(line: str) -> bool:
     """'12', 'K-3', 'Apple Inc. | 2024 Form 10-K | 5', 'Table of Contents' 같은 줄."""
     if _PAGE_NUMBER.fullmatch(line) or _RUNNING_HEADER.fullmatch(line):
         return True
-    return len(line) < 120 and bool(_FORM_FOOTER.search(line)) and line[-1].isdigit()
+    footer = len(line) < 120 and bool(_FORM_FOOTER.search(line))
+    return footer and (line[-1].isdigit() or "|" in line)
+
+
+def item_token(line: str) -> str | None:
+    """항목 제목 줄이면 항목 번호('1', '1a', '7' 등)를, 아니면 None을 돌려준다."""
+    m = _ITEM_HEADING.match(line)
+    if not m or len(line) >= 100:  # 긴 줄은 제목이 아니라 본문 문장이다
+        return None
+    number = _ROMAN.get(m.group(1).lower(), m.group(1))
+    return (number + (m.group(2) or m.group(3) or "")).lower()
+
+
+def _has_title(line: str) -> bool:
+    """'Item 1A. Risk Factors'처럼 항목 번호 뒤에 제목 단어가 붙어 있는지."""
+    m = _ITEM_HEADING.match(line)
+    return bool(m and _TITLE_WORD.search(line, m.end()))
 
 
 def is_table_row(line: str) -> bool:
@@ -56,10 +91,19 @@ def is_table_row(line: str) -> bool:
 class CleanedSection:
     text: str
     first_line: str
-    """제목 판정에 쓴 첫 줄 (품질 리포트에서 눈으로 확인하는 용도)."""
+    """정제 후 첫 줄 (품질 리포트에서 눈으로 확인하는 용도)."""
     heading_ok: bool
+    """앞 세 줄 안에서 이 섹션의 제목을 찾았는지. 못 찾아도 본문이 맞는 경우가 많아 참고용이다."""
+    wrong_item: str | None
+    """앞 세 줄에서 다른 항목 제목(예: Item 1C)이 먼저 나오면 그 번호."""
     starts_with_note: bool
-    """'NOTE 2. ...'로 시작하면 재무제표 주석을 잘못 잘라 온 것일 가능성이 크다."""
+    """'NOTE 2. ...'로 시작하면 재무제표 주석을 잘못 잘라 온 것이다."""
+    starts_with_statement: bool
+    """'Consolidated Statements of Income'처럼 재무제표로 시작하는 경우."""
+    toc_like: bool
+    """'Item N'으로 시작하는 짧은 줄이 5종류 이상이면 목차·상호참조 색인이다."""
+    cut_at: str | None
+    """본문 중간에 다음 항목 제목이 나와 거기서 잘랐다면 그 항목 번호."""
     n_chars_raw: int
     n_page_lines: int
     n_table_lines: int
@@ -76,11 +120,13 @@ def clean_section(
     lines = [re.sub(r"\s+", " ", ln).strip() for ln in normalize(raw).split("\n")]
     lines = [ln for ln in lines if ln]
     total_chars = sum(map(len, lines))
+    # 쪽마다 반복되는 짧은 줄(회사명 머리글 등)도 머리글로 본다
+    counts = Counter(ln for ln in lines if len(ln) < 80)
 
     kept: list[str] = []
     n_page = n_table = table_chars = 0
     for line in lines:
-        if is_page_marker(line):
+        if is_page_marker(line) or counts.get(line, 0) >= 4:
             n_page += 1
             if drop_page_markers:
                 continue
@@ -92,15 +138,44 @@ def clean_section(
         kept.append(line)
 
     first = kept[0] if kept else ""
-    heading_ok = bool(_SECTION_HEADINGS[section].match(first))
-    # 모든 회사에 똑같이 들어가는 'Item 1. Business' 같은 제목 줄은 뺀다
-    if heading_ok and len(first) < 100:
-        kept = kept[1:]
+    expected = _EXPECTED_ITEM[section]
+    heading_at, wrong_item = None, None
+    for i, line in enumerate(kept[:3]):
+        token = item_token(line)
+        if token is not None:
+            if token == expected:
+                heading_at = i
+            else:
+                wrong_item = token
+            break
+        if len(line) < 100 and _NAME_HEADINGS[section].match(line):
+            heading_at = i
+            break
+    # 모든 회사에 똑같이 들어가는 'Item 1. Business' 같은 제목 줄(과 그 앞 머리글)은 뺀다
+    if heading_at is not None:
+        kept = kept[heading_at + 1 :]
+    # 다음 항목 제목이 나오면 거기서 자른다. edgartools가 경계를 놓쳐 Item 1 뒤에
+    # Item 1A 전체를 붙여 오는 경우가 있다 (예: Bloom Energy, Rollins).
+    cut_at = None
+    if wrong_item is None:
+        for i, line in enumerate(kept):
+            token = item_token(line)
+            # 'Item 8'이나 'Item 8 of'처럼 문장이 줄바꿈으로 끊긴 조각은 제목이 아니다.
+            # 제목이면 뒤에 'Risk', 'Properties' 같은 단어가 붙는다.
+            if token is not None and token != expected and _has_title(line):
+                cut_at, kept = token, kept[:i]
+                break
+    # 색인 표의 줄은 쪽 번호 때문에 표로 지워지기도 하므로 정제 전 줄로 센다
+    item_lines = {t for ln in lines if (t := item_token(ln)) is not None}
     return CleanedSection(
         text="\n".join(kept),
         first_line=first[:200],
-        heading_ok=heading_ok,
+        heading_ok=heading_at is not None,
+        wrong_item=wrong_item,
         starts_with_note=bool(_NOTE_HEADING.match(first)),
+        starts_with_statement=bool(_FINANCIAL_STATEMENT.match(first)),
+        toc_like=len(item_lines) >= 5,
+        cut_at=cut_at,
         n_chars_raw=total_chars,
         n_page_lines=n_page,
         n_table_lines=n_table,
@@ -108,15 +183,47 @@ def clean_section(
     )
 
 
-def assess(fetch_status: str, cleaned: CleanedSection | None, min_chars: int) -> str:
-    """분석에 쓸 수 있는지 판정한다: ok / suspect / too_short / missing / no_filing / error."""
+def duplicate_share(text: str, other: str, min_len: int = 40) -> float:
+    """text의 (충분히 긴) 줄 중 other에도 그대로 있는 줄의 비율.
+
+    edgartools가 다른 섹션의 일부를 이 섹션으로 잘라 오는 경우를 잡는다.
+    예: Devon Energy의 Item 1 자리에 Item 1A의 일부가 들어온 사례.
+    """
+    lines = {ln for ln in text.split("\n") if len(ln) >= min_len}
+    if not lines:
+        return 0.0
+    other_lines = {ln for ln in other.split("\n") if len(ln) >= min_len}
+    return len(lines & other_lines) / len(lines)
+
+
+def assess(
+    fetch_status: str,
+    cleaned: CleanedSection | None,
+    min_chars: int,
+    duplicate_of: str | None = None,
+) -> tuple[str, str | None]:
+    """분석에 쓸 수 있는지 판정한다. (status, 사유 코드)를 돌려준다.
+
+    status: ok / suspect / too_short / missing / no_filing / error
+    """
     if fetch_status != "fetched" or cleaned is None:
-        return fetch_status
-    if cleaned.starts_with_note or not cleaned.heading_ok:
-        return "suspect"
+        return fetch_status, None
+    if cleaned.starts_with_note:
+        return "suspect", "note"
+    if cleaned.wrong_item:
+        return "suspect", f"wrong_item:{cleaned.wrong_item}"
+    if cleaned.starts_with_statement:
+        return "suspect", "financial_statement"
+    if cleaned.toc_like:
+        return "suspect", "toc"
+    if duplicate_of:
+        return "suspect", f"duplicate:{duplicate_of}"
     if len(cleaned.text) < min_chars:
-        return "too_short"
-    return "ok"
+        return "too_short", f"chars:{len(cleaned.text)}"
+    notes = [] if cleaned.heading_ok else ["no_heading"]
+    if cleaned.cut_at:
+        notes.append(f"cut:{cleaned.cut_at}")
+    return "ok", ";".join(notes) or None
 
 
 def chunk_text(

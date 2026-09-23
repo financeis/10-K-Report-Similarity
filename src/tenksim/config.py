@@ -51,7 +51,8 @@ class FilingsConfig(_Strict):
 class TextConfig(_Strict):
     drop_page_markers: bool = True
     drop_table_rows: bool = True
-    min_chars: int = 1000
+    min_chars: int = 3000
+    """정제 후 이보다 짧으면 too_short. 큰 은행은 Item 1A를 다른 곳으로 떠넘겨 몇백 자만 남기도 한다."""
     exclude_suspect: bool = True
     """섹션 추출이 의심스러운(제목이 안 맞는 등) 문서를 분석에서 뺀다."""
 

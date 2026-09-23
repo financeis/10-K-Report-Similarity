@@ -1,6 +1,6 @@
 # smoke 결과 리포트
 
-- 생성: 2026-09-24T00:30:49
+- 생성: 2026-09-24T01:46:40
 - 10-K 제출 연도: 2024 · 수집 섹션: business
 - 분석 대상: 18개 기업 (universe 20개 중)
 - 방법: `tfidf` (tfidf, business), `minilm` (sbert, business)
@@ -16,10 +16,10 @@
 
 분석에서 제외된 문서:
 
-| 티커 | 회사 | 섹션 | 상태 | 첫 줄 / 오류 |
-|---|---|---|---|---|
-| GE | GENERAL ELECTRIC CO | business | suspect | NOTE 2. BUSINESSES HELD FOR SALE AND DISCONTINUED OPERATIONS. In the fourth quarter of 202 |
-| INTC | INTEL CORP | business | suspect | Item Number Item |
+| 티커 | 회사 | 섹션 | 상태 | 사유 | 첫 줄 / 오류 |
+|---|---|---|---|---|---|
+| GE | GENERAL ELECTRIC CO | business | suspect | 재무제표 주석으로 시작 | NOTE 2. BUSINESSES HELD FOR SALE AND DISCONTINUED OPERATIONS. In the fourth quar |
+| INTC | INTEL CORP | business | suspect | 목차·상호참조 색인 형식 | Item Number Item |
 
 ## 2. 산업분류 재현
 
@@ -31,7 +31,7 @@
 |---|---|---|---|
 | tfidf | 0.940 | 0.833 | 0.722 |
 | minilm | 0.975 | 0.889 | 0.667 |
-| minilm+center | 0.968 | 0.944 | 0.704 |
+| minilm+center | 0.967 | 0.944 | 0.704 |
 | (무작위 기대값) | 0.500 | 0.209 | 0.209 |
 
 ### GICS 서브산업 (n=18)
@@ -48,7 +48,7 @@
 | 방법 | AUC | P@1 | P@3 |
 |---|---|---|---|
 | tfidf | 0.973 | 0.778 | 0.426 |
-| minilm | 0.972 | 0.778 | 0.426 |
+| minilm | 0.971 | 0.778 | 0.426 |
 | minilm+center | 0.977 | 0.833 | 0.426 |
 | (무작위 기대값) | 0.500 | 0.098 | 0.098 |
 
@@ -72,9 +72,9 @@ Spearman은 전체 기업쌍 점수의 순위 상관, Jaccard@3는 상위 3개 �
 
 | A | B | Spearman | Jaccard@3 |
 |---|---|---|---|
-| tfidf | minilm | 0.687 | 0.622 |
-| tfidf | minilm+center | 0.669 | 0.589 |
-| minilm | minilm+center | 0.830 | 0.817 |
+| tfidf | minilm | 0.686 | 0.622 |
+| tfidf | minilm+center | 0.667 | 0.589 |
+| minilm | minilm+center | 0.828 | 0.817 |
 
 ## 5. 예시: 유사 기업 상위 5개 (`minilm+center`)
 
@@ -82,10 +82,10 @@ Spearman은 전체 기업쌍 점수의 순위 상관, Jaccard@3는 상위 3개 �
 
 | 회사 | 1 | 2 | 3 | 4 | 5 |
 |---|---|---|---|---|---|
-| AAPL | MSFT (88) | ORCL (80) | SNPS (79) | CDNS (78) | AMD (78) |
+| AAPL | MSFT (88) | ORCL (81) | SNPS (79) | CDNS (78) | AMD (77) |
 | MSFT | NVDA (93) | ORCL (92) | AAPL (88) | SNPS (88) | CDNS (86) |
 | NVDA | AMD (95) | MSFT (93) | CDNS (93) | SNPS (89) | ORCL (84) |
 | JPM | BAC (97) | WFC (96) | SPG (87) | BRK.B (76) | XOM (74) |
-| XOM | CVX (94) | BRK.B (80) | O (77) | SPG (75) | JPM (74) |
-| PFE | LLY (100) | MRK (99) | AAPL (67) | BRK.B (66) | XOM (55) |
+| XOM | CVX (94) | BRK.B (80) | O (78) | SPG (75) | JPM (74) |
+| PFE | LLY (100) | MRK (99) | AAPL (68) | BRK.B (66) | XOM (55) |
 
