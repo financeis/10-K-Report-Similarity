@@ -6,7 +6,7 @@
 
 > 10-K 사업 설명(Item 1)으로 계산한 기업 유사도가 SIC·GICS 같은 기존 산업분류보다 더 나은 peer(비교 대상 기업)를 찾는가?
 
-이 프로젝트의 가치는 **분류표가 묶지 않는 경제적 연결**을 찾는 데 있습니다. 예를 들어 Skyworks는 GICS상 Apple과 다른 서브산업(반도체)이지만, Apple의 핵심 부품 공급사입니다. 2025년 잔차 수익률 상관도 0.22로, Apple과 가장 같이 움직인 회사 상위 1%에 듭니다. TF-IDF는 Apple의 1위 이웃으로 Skyworks를 찾았습니다. 그런데 서브산업 P@1로 채점하면 이 답은 '오답'입니다.
+이 프로젝트의 가치는 **분류표가 묶지 않는 경제적 연결**을 찾는 데 있습니다. 예를 들어 Skyworks는 GICS상 Apple과 다른 서브산업(반도체)이지만, Apple의 핵심 부품 공급사입니다. 2025년 잔차 수익률 상관도 0.27로, Apple과 가장 같이 움직인 회사 475개 중 2위입니다. TF-IDF는 Apple의 1위 이웃으로 Skyworks를 찾았습니다. 그런데 서브산업 P@1로 채점하면 이 답은 '오답'입니다.
 
 그래서 평가의 무게를 이렇게 둡니다.
 
@@ -109,7 +109,15 @@ edgartools가 주는 텍스트는 문단이 줄바꿈으로 나뉘어 있고 HTM
 
 - 구간은 **공시 연도 다음 해**입니다(`sp500_2024`는 2025년). 유사도를 만들 때 쓴 정보가 모두 공개된 뒤의 수익률이므로 미래 정보가 섞이지 않습니다(look-ahead bias 방지).
 - **raw:** 일별 수익률 상관. 시장 전체가 오르내리는 움직임(베타)이 대부분을 차지해서, 무작위 쌍도 0.3 안팎이 나옵니다.
-- **resid:** 시장 모형 `r_i = a + b·r_SPY + e`의 잔차 `e`끼리의 상관. 시장 공통 움직임을 빼므로 무작위 쌍은 0 근처가 되고, '사업이 비슷해서 같이 움직이는' 부분에 더 가깝습니다.
+- **resid:** 시장 모형 `r_i = a + b·r_market + e`의 잔차 `e`끼리의 상관. 시장 공통 움직임을 빼므로 무작위 쌍은 0 근처가 되고, '사업이 연결돼 있어서 같이 움직이는' 부분에 더 가깝습니다.
+- **시장 요인은 유니버스 동일가중 평균(자기 자신 제외)입니다.** 처음에는 SPY를 썼는데, 시가총액 가중 지수라서 지수 비중이 큰 대형주끼리의 잔차 상관이 음(-)으로 치우쳤습니다. 지수가 사실상 그 회사들의 평균이라, 지수를 빼면 그들이 공유하는 움직임까지 빠지기 때문입니다.
+  - 2025년 Apple–Microsoft: SPY 기준 -0.09, 동일가중 기준 +0.19
+  - 2025년 Alphabet–Meta: SPY 기준 0.00, 동일가중 기준 +0.23
+  - 동일가중으로 바꾸면 무작위 쌍의 평균이 0.082에서 0.005로 제대로 0이 되고, 방법 간 순위는 그대로입니다. `returns.market: SPY`로 예전 방식을 쓸 수 있습니다.
+- **해석 주의: 이 지표는 공통 노출을 잽니다.** 경쟁사의 주가에는 공통 충격(+)과 점유율 경쟁(-)이 섞입니다.
+  - 공통 노출이 이긴 쌍: Visa–Mastercard, Home Depot–Lowe's, AT&T–Verizon (+0.7 이상)
+  - 0 근처인 쌍: Amazon–Walmart(-0.03), Oracle–Salesforce(+0.02)
+  - 텍스트 상위 5 이웃 쌍 중 상관이 음수인 쌍은 8%로 드뭅니다. 하지만 섹터 공통 움직임까지 빼면 23%가 음수가 됩니다. 경쟁 관계를 따로 보려면 관계 유형별 정답이나 이벤트 기반 검증이 필요합니다(7장).
 - 방법 지표: 회사마다 텍스트 상위 k개 이웃과의 평균 상관을 구해 전체 평균을 냅니다.
 - 기준선:
   - 같은 GICS/SIC 레이블 회사 **전체**를 peer로 둔 값(참고 논문의 'dynamic k')
@@ -164,6 +172,7 @@ edgartools가 주는 텍스트는 문단이 줄바꿈으로 나뉘어 있고 HTM
   - 경쟁: 경쟁사 이름은 Item 1의 'Competition' 부분에 주로 나옵니다.
   - 이를 LLM으로 추출해 S&P 500 티커에 연결하면, 공급망 연결과 경쟁 관계를 각각 얼마나 잡는지 따로 잴 수 있습니다. 1장의 '유사성 대 연결성' 구분이 여기서 가능해집니다.
   - 고객·공급사 관계가 수익률 예측력을 갖는다는 선행 연구로는 Cohen & Frazzini(2008)가 있습니다.
+- **이벤트 기반 검증:** 한 해 전체의 상관은 공통 노출(+)과 경쟁 효과(-)가 섞인 결과입니다. 회사 i의 실적 발표일이나 파산 같은 사건에 이웃 j가 어느 방향으로 반응하는지 보면 둘을 나눌 수 있습니다. 같은 방향이면 정보 전이·전염이고, 반대 방향이면 경쟁 효과입니다(Foster 1981, Lang & Stulz 1992).
 - 모델 비교 확대: 금융 특화(voyage-finance 계열), MTEB 상위권 오픈소스 모델, OpenAI 차원별 비교.
 - Hoberg–Phillips TNIC 데이터와 비교. TNIC은 Compustat GVKEY 기준이라 CIK 매핑이 필요합니다.
 - 청크 매칭으로 다각화 기업의 '부분 유사도' 보기(예: Amazon의 AWS와 Microsoft의 Azure).
@@ -177,4 +186,6 @@ edgartools가 주는 텍스트는 문단이 줄바꿈으로 나뉘어 있고 HTM
 - Bhojraj, S., Lee, C. M. C. & Oler, D. K. (2003). What's My Line? A Comparison of Industry Classification Schemes for Capital Market Research. *Journal of Accounting Research*, 41(5), 745–774.
 - Cohen, L., Malloy, C. & Nguyen, Q. (2020). Lazy Prices. *Journal of Finance*, 75(3), 1371–1415.
 - Cohen, L. & Frazzini, A. (2008). Economic Links and Predictable Returns. *Journal of Finance*, 63(4), 1977–2011.
+- Foster, G. (1981). Intra-industry Information Transfers Associated with Earnings Releases. *Journal of Accounting and Economics*, 3(3), 201–232.
+- Lang, L. H. P. & Stulz, R. M. (1992). Contagion and Competitive Intra-industry Effects of Bankruptcy Announcements. *Journal of Financial Economics*, 32(1), 45–60.
 - Loughran, T. & McDonald, B. (2020). Textual Analysis in Finance. *Annual Review of Financial Economics*, 12, 357–375.

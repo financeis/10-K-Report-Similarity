@@ -418,6 +418,7 @@ def _returns_metrics(
     idx = np.flatnonzero(enough)
     out: dict = {
         "n": int(len(idx)),
+        "market": rc.market,
         "start": str(rc.start),
         "end": str(rc.end),
         "methods": {},

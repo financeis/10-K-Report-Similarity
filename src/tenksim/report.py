@@ -165,11 +165,13 @@ def _quality_section(docs: pd.DataFrame) -> list[str]:
 def _returns_section(metrics: dict, ks: list[int], k0: int, base: str) -> list[str]:
     rm = metrics["returns"]
     ci = rm["ci"][f"resid@{k0}"]
+    market = rm.get("market", "SPY")
+    basis = "유니버스 동일가중 평균(자기 제외)" if market == "equal_weight" else f"`{market}`"
     out = [
         f"## 2. 주가 동조성 ({rm['start']} ~ {rm['end']}, n={rm['n']})",
         "",
         "텍스트로 찾은 이웃과의 일별 수익률 상관 평균입니다. 이 프로젝트의 핵심 지표입니다. "
-        "잔차는 시장 전체 움직임(베타)을 뺀 값이라 무작위 쌍이 0 근처가 됩니다. "
+        f"잔차는 시장 수익률({basis})로 설명되는 움직임을 뺀 값이라 무작위 쌍이 0 근처가 됩니다. "
         "산업분류 기준선은 같은 분류의 회사 **전체**를 peer로 둔 값입니다.",
         "",
     ]

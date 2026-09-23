@@ -93,7 +93,9 @@ class MethodConfig(_Strict):
 class ReturnsConfig(_Strict):
     start: date
     end: date
-    market: str = "SPY"
+    market: str = "equal_weight"
+    """잔차를 낼 시장 수익률. equal_weight(유니버스 동일가중, 자기 제외) 또는 지수 티커(예: SPY).
+    시가총액 가중 지수는 대형주끼리의 잔차 상관을 음(-)으로 치우치게 한다."""
     min_obs: int = 150
     """이보다 거래일 관측치가 적은 종목은 수익률 평가에서 뺀다."""
 

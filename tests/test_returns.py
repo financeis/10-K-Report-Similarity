@@ -2,7 +2,9 @@ import numpy as np
 import pandas as pd
 
 from tenksim.returns import (
+    EQUAL_WEIGHT,
     correlation_matrices,
+    equal_weight_market,
     incremental_effect,
     label_peers,
     peer_correlation,
@@ -101,3 +103,33 @@ def test_incremental_effect_detects_links_beyond_labels():
     sim, corr, same, parent = make_linked_world(text_matters=False)
     r = incremental_effect(sim, corr, same, parent, n_boot=50)
     assert r["lo"] < 0 < r["hi"]  # 레이블로 다 설명되면 텍스트의 추가 효과는 0 근처
+
+
+def test_equal_weight_market_excludes_self():
+    rets = pd.DataFrame(
+        {"A": [0.01, 0.02, np.nan], "B": [0.03, 0.00, 0.01], "C": [0.05, 0.04, 0.03]}
+    )
+    m = equal_weight_market(rets)
+    np.testing.assert_allclose(m["A"], [0.04, 0.02, 0.02])  # A가 없는 날은 나머지 전부의 평균
+    np.testing.assert_allclose(m["B"], [0.03, 0.03, 0.03])
+
+
+def test_cap_weighted_index_biases_megacap_pairs():
+    """지수 비중이 큰 두 종목은 그 지수로 잔차를 내면 서로 음(-)의 상관처럼 보인다."""
+    rng = np.random.default_rng(0)
+    n_days, n_small = 500, 30
+    common = rng.normal(0, 0.01, n_days)
+    tech = rng.normal(0, 0.01, n_days)  # 두 대형주만 공유하는 요인
+    rets = {"MEGA1": common + tech + rng.normal(0, 0.005, n_days)}
+    rets["MEGA2"] = common + tech + rng.normal(0, 0.005, n_days)
+    for i in range(n_small):
+        rets[f"S{i}"] = common + rng.normal(0, 0.01, n_days)
+    frame = pd.DataFrame(rets, index=pd.bdate_range("2025-01-01", periods=n_days))
+    small_avg = frame[[f"S{i}" for i in range(n_small)]].mean(axis=1)
+    frame["CAPW"] = 0.45 * frame["MEGA1"] + 0.45 * frame["MEGA2"] + 0.10 * small_avg
+    prices = 100 * (1 + frame).cumprod()
+    tickers = ["MEGA1", "MEGA2", *[f"S{i}" for i in range(n_small)]]
+    _, resid_capw, _ = correlation_matrices(prices, tickers, "CAPW", 100)
+    _, resid_ew, _ = correlation_matrices(prices, tickers, EQUAL_WEIGHT, 100)
+    assert resid_capw[0, 1] < 0  # 실제로는 같은 요인을 공유하는데도
+    assert resid_ew[0, 1] > 0.5
