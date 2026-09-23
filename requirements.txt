@@ -1,3 +1,0 @@
-sec-api>=1.0.32
-pandas>=1.5.1
-openpyxl>=3.1.5

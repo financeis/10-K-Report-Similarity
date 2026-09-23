@@ -1,169 +1,139 @@
-# 기업 유사도 분석 시스템 (Company Similarity Analysis System)
+# 10-K Report Similarity
 
-SEC 10-K 보고서를 활용한 기업 간 유사도 측정 시스템
+SEC 10-K의 사업 설명(Item 1)으로 기업 간 사업 유사도를 측정하는 연구용 파이프라인입니다.
+그 점수가 믿을 만한지 **산업분류(GICS·SIC)를 재현하는지**, **다음 해 주가가 실제로 같이 움직이는 기업을 찾는지**로 검증합니다.
 
-## 📋 프로젝트 개요
+> **연구 질문:** 10-K 사업 설명으로 찾은 '비슷한 기업'이 기존 산업분류보다 더 나은 peer인가?
 
-본 프로젝트는 미국 상장 기업들의 SEC 10-K 보고서에서 비즈니스 설명(Item 1) 및 리스크 요인(Item 1A) 섹션을 추출하여, OpenAI의 임베딩 모델을 통해 기업 간 유사도를 계산하는 시스템입니다.
+설계 근거와 지표 정의는 [docs/methodology.md](docs/methodology.md)에 있습니다.
 
-### 주요 기능
-- SEC API를 통한 10-K 보고서 자동 수집
-- 텍스트 청킹(chunking)을 통한 대용량 문서 처리
-- OpenAI text-embedding-3 모델을 활용한 임베딩 생성
-- 코사인 유사도 기반 기업 간 유사도 계산
-- k-NN(k-최근접 이웃) 알고리즘을 통한 유사 기업 탐색
-- 시각화 및 결과 분석
+## v1 → v2에서 바뀐 점
 
-## 🚀 시작하기
+| | v1 (2025-09) | v2 |
+|---|---|---|
+| 대상 | 기술주 5개 | S&P 500 (약 500개, 11개 섹터) |
+| 텍스트 | Item 1 + 1A 청크 평균 (1A가 58~77%) | Item 1이 기본, 1A는 따로 비교 |
+| 수집 | sec-api.io (유료, API 키) | edgartools로 EDGAR 직접 (무료) |
+| 전처리 | 소문자화·구두점 제거 | 대소문자 유지, 표·쪽번호·머리글 제거, 추출 오류 판정 |
+| 모델 | OpenAI 임베딩 3종 차원 | TF-IDF 기준선 + 로컬 SBERT (+ OpenAI 선택) |
+| 검증 | 없음 | 산업분류 재현(P@k, AUC), 다음 해 수익률 상관 |
+| 재현성 | 파일명·키 하드코딩 | 설정 파일, 단계별 캐시, 환경변수, 테스트 |
 
-### 필수 요구사항
-- Python 3.8 이상
-- OpenAI API 키
-- SEC API 키
+## 파이프라인
 
-### 설치
+```
+S&P 500 목록 ──▶ EDGAR 10-K ──▶ 정제·품질 판정 ──▶ 기업 벡터 ──▶ 평가 ──▶ reports/<name>.md
+(위키피디아)     (edgartools)    표·쪽번호 제거       TF-IDF        GICS·SIC 재현
+                 Item 1 / 1A     추출 오류 걸러냄     SBERT         다음 해 주가 동조성
+                                                      OpenAI        방법 간 일치도
+```
 
-1. 필요한 패키지 설치:
+## 설치
+
+[uv](https://docs.astral.sh/uv/)를 권장합니다.
+
 ```bash
-pip install pandas numpy openai sec-api tqdm matplotlib seaborn scikit-learn
+uv sync --extra sbert --extra returns   # 로컬 임베딩 모델 + 수익률 검증
+uv sync --all-extras                    # OpenAI, 개발 도구(pytest, ruff)까지 전부
 ```
 
-2. API 키 설정:
-   - `create_embeddings.py`의 16번째 줄에 OpenAI API 키 입력
-   - `data_collection_chunked.py`에 SEC API 키 입력
+pip를 쓴다면 `pip install -e ".[sbert,returns]"`로 설치합니다. Python 3.10 이상이 필요합니다.
 
-## 📁 프로젝트 구조
+`.env.example`을 `.env`로 복사하고 값을 채웁니다. `.env`는 git에 올라가지 않습니다.
 
-```
-PythonProject2/
-│
-├── data_collection_chunked.py    # SEC 10-K 보고서 수집 및 청킹
-├── create_embeddings.py          # OpenAI API를 통한 임베딩 생성
-├── calculate_similarity.py       # 기업 간 유사도 계산 및 분석
-├── create_utf8_chunked.py        # UTF-8 인코딩 변환 유틸리티
-│
-├── embeddings_*.pkl              # 생성된 임베딩 데이터 (3072d, 1536d, 768d)
-├── embedding_metadata_*.json     # 임베딩 메타데이터
-├── knn_results.json              # k-NN 분석 결과
-├── similarity_matrix.csv         # 유사도 매트릭스
-│
-└── README.md                     # 프로젝트 문서
-```
-
-## 🔄 실행 순서
-
-### 1단계: 데이터 수집
 ```bash
-python data_collection_chunked.py
+EDGAR_IDENTITY="이름 이메일"   # 필수. SEC가 요청마다 요구합니다
+OPENAI_API_KEY=...            # 선택. methods에 kind: openai를 쓸 때만
 ```
-- S&P 500 기업들의 10-K 보고서 수집
-- Item 1 (Business) 및 Item 1A (Risk Factors) 섹션 추출
-- 텍스트를 8000자 단위로 청킹 (500자 오버랩)
-- 결과: `company_documents_chunked_YYYYMMDD_HHMMSS.pkl`
 
-### 2단계: 임베딩 생성
+## 실행
+
 ```bash
-python create_embeddings.py
+uv run tenksim run -c configs/smoke.yaml        # 기업 20개, 5~10분. 설치·연결 확인용
+uv run tenksim run -c configs/sp500_2024.yaml   # 본 실험 (수집 30분~1시간 + 임베딩 1시간 안팎)
 ```
-- 수집된 텍스트 데이터 전처리 (소문자 변환, 특수문자 제거 등)
-- OpenAI text-embedding-3 모델을 통한 임베딩 벡터 생성
-- 3가지 차원 옵션: 3072d, 1536d, 768d
-- 결과: `embeddings_*d_YYYYMMDD_HHMMSS.pkl`
 
-### 3단계: 유사도 분석
+중간에 끊겨도 같은 명령을 다시 실행하면 받아 둔 10-K와 계산한 임베딩은 건너뜁니다.
+단계별로 나눠 돌릴 수도 있습니다.
+
 ```bash
-python calculate_similarity.py
-```
-- 코사인 유사도 매트릭스 생성
-- k-NN 분석 수행
-- 시각화 (히트맵, 막대 그래프)
-- 결과:
-  - `similarity_matrix.csv`
-  - `knn_results.json`
-  - `similarity_heatmap.png`
-  - `aapl_neighbors.png`
-
-## 📊 주요 모듈 설명
-
-### data_collection_chunked.py
-- **Document 클래스**: 청크 데이터 구조 정의
-- **TextChunker 클래스**: 텍스트 분할 처리
-- **SECDataCollector 클래스**: SEC API 연동 및 데이터 수집
-- 청크 크기: 8000자 (오버랩 500자)
-
-### create_embeddings.py
-- **preprocess_text()**: 텍스트 전처리 (URL 제거, 소문자 변환 등)
-- **create_embeddings()**: OpenAI API를 통한 임베딩 생성
-- 배치 처리로 API 호출 최적화
-- 3가지 차원 옵션 지원
-
-### calculate_similarity.py
-- **calculate_cosine_similarity()**: 두 벡터 간 코사인 유사도 계산
-- **create_similarity_matrix()**: 전체 기업 간 유사도 매트릭스 생성
-- **find_k_nearest_neighbors()**: k개의 가장 유사한 기업 탐색
-- **visualize_*()**: 결과 시각화 함수들
-
-## 📈 출력 결과
-
-### 유사도 매트릭스 (similarity_matrix.csv)
-- 모든 기업 쌍에 대한 코사인 유사도 값 (0~1)
-- 대각선은 1 (자기 자신과의 유사도)
-
-### k-NN 결과 (knn_results.json)
-```json
-{
-  "AAPL": [
-    {"ticker": "MSFT", "similarity": 0.8523},
-    {"ticker": "GOOGL", "similarity": 0.8234},
-    ...
-  ],
-  ...
-}
+uv run tenksim ingest   -c configs/sp500_2024.yaml   # 기업 목록 + 10-K 수집 + 정제·품질 판정
+uv run tenksim embed    -c configs/sp500_2024.yaml   # --method minilm 처럼 일부만 가능
+uv run tenksim evaluate -c configs/sp500_2024.yaml   # metrics.json + reports/sp500_2024.md
 ```
 
-### 시각화
-- **similarity_heatmap.png**: 유사도 매트릭스 히트맵
-- **aapl_neighbors.png**: AAPL의 가장 유사한 기업 10개 막대 그래프
+결과를 살펴보는 명령도 있습니다.
 
-## ⚙️ 주요 파라미터
+```console
+$ uv run tenksim neighbors -c configs/smoke.yaml --method minilm --center NVDA -k 3
+NVDA 와 비슷한 기업 (minilm+center)
+  1. AMD    Advanced Micro Devices                   cos=0.604  pct= 95.4
+  2. MSFT   Microsoft                                cos=0.485  pct= 93.4
+  3. CDNS   Cadence Design Systems                   cos=0.484  pct= 92.8
 
-### 청킹 설정
-- `chunk_size`: 8000 (각 청크의 최대 문자 수)
-- `overlap`: 500 (청크 간 중복 문자 수)
+$ uv run tenksim explain -c configs/smoke.yaml --method minilm SNPS CDNS --top 1
+[1] cosine=0.813
+  SNPS: Company and Segment Overview Synopsys, Inc. (Synopsys, we, our or us) delivers trusted and comprehensive silicon to systems design solutions, from electronic design automation (EDA), ...
+  CDNS: Historically, the industry that provided the tools used by IC engineers was referred to as Electronic Design Automation (“EDA”). ...
+```
 
-### 임베딩 설정
-- `dimensions`: 3072, 1536, 768 중 선택
-- `model`: "text-embedding-3-large" 또는 "text-embedding-3-small"
+`pct`는 전체 기업쌍 중 백분위(0~100)입니다. 코사인 값 자체는 모델마다 분포가 달라 절대값으로 해석하면 안 됩니다.
+`explain`은 두 회사가 비슷하다고 나온 근거 문단을 보여줍니다.
 
-### 유사도 분석 설정
-- `k`: k-NN에서 찾을 이웃 수 (기본값: 5)
-- `test_tickers`: 예시 분석용 기업 목록
+## 산출물
 
-## 📝 주의사항
+| 경로 | 내용 |
+|---|---|
+| `reports/<name>.md` | 결과 리포트: 데이터 품질, 산업분류 재현, 주가 동조성, 방법 간 일치도, 예시 ([smoke 예시](reports/smoke.md)) |
+| `data/sections/<year>/<cik>.parquet` | 회사별 10-K 섹션 원문 (모든 실행이 공유) |
+| `data/embeddings.sqlite` | 청크 임베딩 캐시 (모델 + 텍스트 해시 기준) |
+| `data/runs/<name>/` | universe, 정제된 문서, method별 벡터·청크·이웃, `metrics.json` |
 
-1. **API 키 보안**: API 키를 코드에 직접 입력하지 말고 환경 변수나 별도 설정 파일 사용 권장
-2. **API 사용량**: OpenAI API는 유료이므로 대량 데이터 처리 시 비용 주의
-3. **데이터 크기**: S&P 500 전체 기업 처리 시 상당한 시간과 저장 공간 필요
-4. **메모리 사용**: 대량의 임베딩 데이터 로드 시 메모리 사용량 주의
+`data/`는 git에 올리지 않습니다. 이 밖에 edgartools의 HTTP 캐시(`~/.edgar`, 10-K 한 건에 평균 수 MB)와
+Hugging Face 모델 캐시(`~/.cache/huggingface`)가 쌓입니다.
 
-## 🔬 분석 방법론
+## 설정 파일
 
-1. **데이터 수집**: SEC EDGAR 데이터베이스에서 최신 10-K 보고서 추출
-2. **전처리**: 텍스트 정규화, 특수문자 제거, 소문자 변환
-3. **임베딩**: OpenAI의 최신 임베딩 모델 활용
-4. **유사도 계산**: 코사인 유사도를 통한 벡터 간 거리 측정
-5. **결과 분석**: k-NN 및 클러스터링을 통한 유사 기업 그룹 식별
+`configs/*.yaml` 하나가 실험 한 번입니다. 주요 항목은 다음과 같습니다.
 
-## 📚 참고 자료
+```yaml
+name: sp500_2024
+universe:
+  source: sp500_wikipedia        # 또는 csv (+ path: ticker 또는 cik 컬럼이 있는 파일)
+  tickers: [AAPL, MSFT]          # 일부만 쓸 때
+  cik_overrides: {XOM: 34088}    # CIK가 바뀐 회사를 그해 CIK로 바로잡기
+filings:
+  year: 2024                     # 이 해에 '제출된' 10-K 원본
+  sections: [business, risk_factors]
+methods:
+  - {name: tfidf, kind: tfidf}
+  - {name: mpnet-1536, kind: sbert, model: sentence-transformers/all-mpnet-base-v2, doc_tokens: 1536}
+  - {name: minilm-risk, kind: sbert, model: sentence-transformers/all-MiniLM-L6-v2, section: risk_factors}
+evaluation:
+  k: [1, 5, 10]
+  labels: [gics_sector, gics_sub_industry, sic2, sic3]
+  returns: {start: 2025-01-01, end: 2025-12-31}   # 공시 다음 해 → 미래 정보 없음
+```
 
-- [SEC EDGAR API Documentation](https://sec-api.io/docs)
-- [OpenAI Embeddings Guide](https://platform.openai.com/docs/guides/embeddings)
-- [Scikit-learn Cosine Similarity](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.pairwise.cosine_similarity.html)
+모르는 키는 오류로 막습니다(오타 방지). 전체 항목은 `src/tenksim/config.py`에 있습니다.
 
-## 주의점
-Similarity 절대값 수치 자체만 보면, 데이터가 좁은 구간에 몰려 있음을 알 수 있다. 따라서, 0~100 스케일로 측정하려면 전처리가 더 필요하다. 
-가장 합리적 방법은 k-NN으로 기업별로 가장 유사도 높은 기업 N개를 선정하는 방법이다. (Company Simlarity using Large Language Models (1).pdf 참고) 
+## 테스트
 
----
+```bash
+uv run pytest                                     # 오프라인 테스트 (네트워크 없이)
+EDGAR_IDENTITY="이름 이메일" uv run pytest -m live  # 실제 EDGAR에서 Apple 10-K를 받아 확인
+```
 
-*마지막 업데이트: 2025년 9월 14일*
+## 알려진 한계
+
+- 기업 목록·GICS·CIK가 모두 **현재** 기준입니다. 과거 연도에 쓰면 생존 편향이 생기고, CIK가 바뀐 회사는
+  `no_filing`으로 나옵니다(`cik_overrides`로 수정).
+- GE, Intel처럼 '10-K 상호참조 색인' 형식을 쓰는 회사는 edgartools가 Item 1을 잘못 잘라 와서
+  `suspect`로 제외됩니다. 제외 목록은 리포트 1장에 나옵니다.
+- 주가는 Yahoo Finance(비공식 API)에서 받습니다.
+
+## 참고
+
+- Vamvourellis et al. (2023), *Company Similarity using Large Language Models*, [arXiv:2308.08031](https://arxiv.org/abs/2308.08031)
+- Hoberg & Phillips (2016), Text-Based Network Industries and Endogenous Product Differentiation, *JPE*
+- [edgartools](https://github.com/dgunning/edgartools) · [SEC EDGAR 접근 규정](https://www.sec.gov/os/accessing-edgar-data)

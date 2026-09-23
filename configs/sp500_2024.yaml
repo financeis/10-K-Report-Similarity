@@ -1,0 +1,55 @@
+# S&P 500 전체, 2024년에 제출된 10-K.
+# 참고 논문(Vamvourellis et al., 2023) Table 1과 같은 형태의 비교 실험입니다.
+# 수익률 검증 구간(2025년)은 공시가 모두 나온 뒤라서 미래 정보가 섞이지 않습니다.
+#
+# 소요 시간(8코어 CPU 기준 대략): 수집 30분~1시간, 임베딩 1시간 안팎.
+# 중간에 끊겨도 같은 명령을 다시 실행하면 받아 둔 10-K와 계산한 임베딩은 건너뜁니다.
+name: sp500_2024
+
+universe:
+  source: sp500_wikipedia
+  # 위키피디아 표의 CIK는 '현재' 값이라, 그 사이 지주회사 전환 등으로 CIK가 바뀐 회사는
+  # 2024년 10-K를 못 찾습니다(리포트의 no_filing). 확인되는 대로 당시 CIK를 적어 주세요.
+  cik_overrides:
+    XOM: 34088  # 2026년 ExxonMobil Holdings Corp(2115436)로 전환
+
+filings:
+  year: 2024
+  sections: [business, risk_factors]
+  workers: 4
+
+methods:
+  # 단어 빈도 기준선. 이걸 못 넘는 임베딩은 쓸 이유가 없습니다.
+  - name: tfidf
+    kind: tfidf
+
+  # 참고 논문의 SBERT-PT와 같은 설정: all-mpnet-base-v2, Item 1 앞 1536 토큰.
+  # (Item 1 전체를 쓰면 CPU에서 1시간 반쯤 걸립니다. doc_tokens를 지우면 전체를 씁니다.)
+  - name: mpnet-1536
+    kind: sbert
+    model: sentence-transformers/all-mpnet-base-v2
+    doc_tokens: 1536
+
+  # 작고 빠른 모델로 Item 1 전체.
+  - name: minilm
+    kind: sbert
+    model: sentence-transformers/all-MiniLM-L6-v2
+
+  # 같은 모델로 Item 1A(리스크 요인) 전체. '사업' 유사도와 '리스크 공시' 유사도를 비교합니다.
+  - name: minilm-risk
+    kind: sbert
+    model: sentence-transformers/all-MiniLM-L6-v2
+    section: risk_factors
+
+  # OPENAI_API_KEY가 있으면 주석을 풀어 함께 비교하세요.
+  # 임베딩한 토큰 수가 data/runs/sp500_2024/methods/openai-3-large/meta.json에 남으니 비용을 확인할 수 있습니다.
+  # - name: openai-3-large
+  #   kind: openai
+  #   model: text-embedding-3-large
+
+evaluation:
+  k: [1, 5, 10]
+  labels: [gics_sector, gics_sub_industry, sic2, sic3]
+  returns:
+    start: 2025-01-01
+    end: 2025-12-31

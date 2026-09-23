@@ -1,0 +1,53 @@
+[project]
+name = "tenksim"
+version = "0.2.0"
+description = "10-K 사업 설명(Item 1)으로 기업 간 유사도를 측정하고 산업분류·주가 수익률로 검증하는 연구용 파이프라인"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "edgartools>=5.58",
+    "httpx>=0.25",
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "pyarrow>=17",
+    "pydantic>=2.6",
+    "python-dotenv>=1.0",
+    "pyyaml>=6.0",
+    "scikit-learn>=1.5",
+    "scipy>=1.11",
+    "tabulate>=0.9",
+    "tqdm>=4.62",
+]
+
+[project.optional-dependencies]
+# 로컬 임베딩 모델 (torch 포함, 무료)
+sbert = ["sentence-transformers>=3.0"]
+# OpenAI 임베딩 API (유료, OPENAI_API_KEY 필요)
+openai = ["openai>=1.40", "tiktoken>=0.7"]
+# 수익률 기반 검증 (Yahoo Finance)
+returns = ["yfinance>=0.2.54", "curl_cffi>=0.15"]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.scripts]
+tenksim = "tenksim.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tenksim"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["live: 실제 EDGAR에 요청을 보내는 테스트 (pytest -m live 로 실행)"]
+addopts = "-m 'not live'"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+# 코드 줄 길이는 ruff format이 맞춘다. 한글은 폭 2로 계산돼 긴 문자열·주석이 자주 걸린다.
+ignore = ["E501"]

@@ -1,0 +1,33 @@
+# 스모크 테스트: 기업 20개, 수 분 이내.
+# 설치, EDGAR 연결, 파이프라인 전체가 도는지 확인하는 용도입니다. 수치 자체는 해석하지 마세요.
+name: smoke
+
+universe:
+  source: sp500_wikipedia
+  # 같은 GICS 서브산업 기업이 2~3개씩 있도록 골랐습니다.
+  # GE(재무제표 주석이 섞여 추출됨)와 BRK.B(티커에 점이 있음)는 예외 처리 확인용입니다.
+  tickers: [AAPL, MSFT, ORCL, NVDA, AMD, INTC, SNPS, CDNS, JPM, BAC,
+            WFC, XOM, CVX, PFE, MRK, LLY, O, SPG, GE, BRK.B]
+  # 위키피디아 표의 CIK는 '현재' 값입니다. ExxonMobil은 2026년 지주회사 전환으로 CIK가 바뀌어
+  # 2024년 10-K는 옛 법인(34088)에 있습니다. 리포트에 no_filing으로 나오면 이렇게 바로잡으세요.
+  cik_overrides:
+    XOM: 34088
+
+filings:
+  year: 2024
+  sections: [business]
+
+methods:
+  - name: tfidf
+    kind: tfidf
+    max_df: 0.5  # 문서가 20개뿐이라 '흔한 단어' 기준을 느슨하게 둡니다
+  - name: minilm
+    kind: sbert
+    model: sentence-transformers/all-MiniLM-L6-v2  # 작고 빠른 모델 (약 90MB)
+
+evaluation:
+  k: [1, 3]
+  labels: [gics_sector, gics_sub_industry, sic2]
+  returns:
+    start: 2025-01-01
+    end: 2025-12-31
