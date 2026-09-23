@@ -64,6 +64,19 @@ def pair_percentiles(sim: np.ndarray) -> np.ndarray:
     return pct
 
 
+def ensemble_similarity(sims: list[np.ndarray], weights: list[float] | None = None) -> np.ndarray:
+    """여러 유사도 행렬을 기업쌍 백분위(0~100)로 바꿔 가중 평균한다.
+
+    TF-IDF 코사인과 임베딩 코사인은 분포가 전혀 달라서 값을 그대로 더하면 한쪽이 지배한다.
+    순위(백분위)로 바꾸면 척도와 상관없이 '둘 다 가깝다고 본 쌍'이 위로 온다.
+    """
+    w = np.asarray(weights or [1.0] * len(sims), dtype=np.float64)
+    w = w / w.sum()
+    out = sum(wi * pair_percentiles(s).astype(np.float64) for wi, s in zip(w, sims, strict=True))
+    np.fill_diagonal(out, 100.0)
+    return out.astype(np.float32)
+
+
 def explain_pair(
     chunks_a: list[str],
     vectors_a: np.ndarray,

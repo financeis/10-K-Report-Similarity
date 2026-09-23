@@ -14,6 +14,7 @@ look-ahead bias를 피하려면 수익률 구간을 공시가 모두 나온 뒤(
 from __future__ import annotations
 
 import logging
+import warnings
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -94,11 +95,95 @@ def correlation_matrices(
     return raw, resid, enough
 
 
+def peer_corr_per_firm(corr: np.ndarray, peers: list[np.ndarray]) -> np.ndarray:
+    """회사별 '자기 peer들과의 평균 상관'. peer가 없으면 NaN."""
+    out = np.full(len(peers), np.nan)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)  # peer의 수익률이 전부 NaN인 경우
+        for i, p in enumerate(peers):
+            if len(p):
+                out[i] = np.nanmean(corr[i, p])
+    return out
+
+
 def peer_correlation(corr: np.ndarray, peers: list[np.ndarray]) -> float:
     """회사마다 '자기 peer들과의 평균 상관'을 구해, 회사들에 대해 다시 평균낸다."""
-    per_company = [np.nanmean(corr[i, p]) for i, p in enumerate(peers) if len(p)]
-    per_company = [v for v in per_company if not np.isnan(v)]
-    return float(np.mean(per_company)) if per_company else float("nan")
+    values = peer_corr_per_firm(corr, peers)
+    return float(np.nanmean(values)) if np.isfinite(values).any() else float("nan")
+
+
+def random_per_firm(corr: np.ndarray, allowed: np.ndarray | None = None) -> np.ndarray:
+    """회사별로 허용된 상대 전체와의 평균 상관 = 그중에서 무작위로 골랐을 때의 기댓값."""
+    mask = ~np.eye(corr.shape[0], dtype=bool)
+    if allowed is not None:
+        mask &= allowed
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        return np.nanmean(np.where(mask, corr, np.nan), axis=1)
+
+
+def top_k_within(sim: np.ndarray, allowed: np.ndarray, k: int) -> list[np.ndarray]:
+    """allowed[i, j]가 참인 상대 중에서 회사 i와 가장 비슷한 k개 (자기 자신 제외)."""
+    s = np.where(allowed, sim.astype(np.float64), -np.inf)
+    np.fill_diagonal(s, -np.inf)
+    order = np.argsort(-s, axis=1, kind="stable")[:, :k]
+    return [row[np.isfinite(s[i, row])] for i, row in enumerate(order)]
+
+
+def incremental_effect(
+    sim: np.ndarray,
+    corr: np.ndarray,
+    same_child: np.ndarray,
+    same_parent: np.ndarray,
+    *,
+    n_boot: int = 200,
+    seed: int = 0,
+) -> dict:
+    """산업분류를 통제한 뒤에도 텍스트 유사도가 주가 동조성을 설명하는지 (기업쌍 회귀).
+
+        잔차상관_ij = a + b1·같은_서브산업 + b2·같은_섹터 + β·z(유사도_ij)
+
+    β는 같은 분류인지 여부를 고정했을 때 유사도가 1 표준편차 높으면 잔차 상관이 얼마나
+    높은지다. β > 0이면 텍스트가 분류표에 없는 연결을 담고 있다는 뜻이다.
+    한 회사가 여러 쌍에 등장해 쌍끼리 독립이 아니므로, 구간은 회사 단위 재표집으로 구한다.
+    """
+    n = sim.shape[0]
+    a, b = np.triu_indices(n, 1)
+    x_all = sim[a, b].astype(np.float64)
+    finite = np.isfinite(x_all) & np.isfinite(corr[a, b])
+    mu, sd = x_all[finite].mean(), x_all[finite].std()
+
+    def fit(i: np.ndarray, j: np.ndarray) -> tuple[float, float, float]:
+        y = corr[i, j]
+        x = (sim[i, j].astype(np.float64) - mu) / sd
+        ok = np.isfinite(y) & np.isfinite(x)
+        y = y[ok]
+        base = np.column_stack([np.ones(ok.sum()), same_child[i, j][ok], same_parent[i, j][ok]])
+        full = np.column_stack([base, x[ok]])
+        tss = ((y - y.mean()) ** 2).sum()
+        r2 = []
+        for design in (base, full):
+            coef, *_ = np.linalg.lstsq(design, y, rcond=None)
+            r2.append(1 - ((y - design @ coef) ** 2).sum() / tss)
+        return float(coef[-1]), float(r2[0]), float(r2[1])
+
+    beta, r2_gics, r2_full = fit(a, b)
+    rng = np.random.default_rng(seed)
+    boots = []
+    for _ in range(n_boot):
+        r = rng.integers(0, n, size=n)
+        ri, rj = r[a], r[b]
+        keep = ri != rj  # 같은 회사가 두 번 뽑혀 생긴 자기 자신과의 쌍은 뺀다
+        boots.append(fit(ri[keep], rj[keep])[0])
+    lo, hi = np.percentile(boots, [2.5, 97.5]) if boots else (np.nan, np.nan)
+    return {
+        "beta": beta,
+        "lo": float(lo),
+        "hi": float(hi),
+        "r2_gics": r2_gics,
+        "r2_full": r2_full,
+        "n_pairs": int(finite.sum()),
+    }
 
 
 def label_peers(labels: np.ndarray) -> list[np.ndarray]:

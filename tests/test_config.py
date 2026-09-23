@@ -50,3 +50,40 @@ def test_minimal_defaults():
 def test_invalid_configs(overrides, message):
     with pytest.raises(ValidationError, match=message):
         Config.model_validate(minimal(**overrides))
+
+
+@pytest.mark.parametrize(
+    "overrides, message",
+    [
+        ({"ensembles": [{"name": "e", "members": ["tfidf"]}]}, "2개 이상"),
+        ({"ensembles": [{"name": "e", "members": ["tfidf", "nope"]}]}, "없는 변형"),
+        ({"ensembles": [{"name": "e", "members": ["tfidf", "tfidf+center"]}]}, "없는 변형"),
+        ({"ensembles": [{"name": "tfidf", "members": ["tfidf", "s"]}]}, "겹칩니다"),
+        ({"evaluation": {"k": [1, 3], "primary_k": 5}}, "primary_k"),
+        ({"evaluation": {"baseline": "nope"}}, "baseline"),
+    ],
+)
+def test_invalid_ensemble_and_evaluation(overrides, message):
+    cfg = minimal(**overrides)
+    cfg["methods"] = [
+        {"name": "tfidf", "kind": "tfidf"},
+        {"name": "s", "kind": "sbert", "model": "m"},
+    ]
+    with pytest.raises(ValidationError, match=message):
+        Config.model_validate(cfg)
+
+
+def test_variant_names_and_main_k():
+    cfg = Config.model_validate(
+        minimal(
+            methods=[
+                {"name": "tfidf", "kind": "tfidf"},
+                {"name": "s", "kind": "sbert", "model": "m"},
+            ],
+            ensembles=[{"name": "e", "members": ["tfidf", "s+center"]}],
+            evaluation={"k": [1, 3]},
+        )
+    )
+    assert cfg.variant_names == ["tfidf", "s", "s+center"]
+    assert cfg.baseline_name == "tfidf" and cfg.evaluation.main_k == 3
+    assert cfg.ensemble("e").members == ["tfidf", "s+center"]

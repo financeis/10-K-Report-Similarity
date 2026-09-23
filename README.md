@@ -24,32 +24,50 @@ SEC 10-K의 사업 설명(Item 1)으로 기업 간 사업 유사도를 측정하
 476개 기업(추출 품질 검사를 통과한 기업)의 Item 1 텍스트로 유사도를 만들고, 2025년 일별 수익률로 검증했습니다.
 전체 표는 [reports/sp500_2024.md](reports/sp500_2024.md)에 있습니다.
 
-| 방법 | GICS 서브산업 AUC | 서브산업 P@1 | 1위 이웃과의 잔차 수익률 상관 |
-|---|---|---|---|
-| TF-IDF (단어 빈도 기준선) | 0.939 | **0.609** | **0.462** |
-| MiniLM, Item 1 전체 (+center) | 0.954 | 0.576 | 0.444 |
-| mpnet, 앞 1536토큰 (+center) | 0.957 | 0.571 | 0.427 |
-| OpenAI 3-large, 앞 1536토큰·384토큰 청크 (+center) | **0.966** | 0.576 | 0.449 |
-| OpenAI 3-large, 8천 토큰 청크 (+center) | 0.818 | 0.334 | 0.310 |
-| MiniLM, **Item 1A** 전체 (+center) | 0.936 | 0.506 | 0.404 |
-| 같은 GICS 서브산업 기업 전체 (기준선) | – | – | 0.395 |
-| 무작위 | 0.500 | 0.012 | 0.082 |
+핵심 지표는 **텍스트 이웃끼리 주가가 실제로 같이 움직이는가**, 그리고 **GICS가 같은 업종으로 묶지 않는 곳에서도 그런가**입니다.
+GICS 분류 재현(P@k)은 텍스트가 사업 내용을 담고 있는지 확인하는 최소 조건으로만 봅니다.
+분류 밖의 연결, 예를 들어 Apple의 부품 공급사 Skyworks를 찾아내면 P@k에서는 오답으로 채점되기 때문입니다.
 
-`+center`는 전체 평균 벡터를 뺀 뒤 잰 코사인 유사도입니다. 아래 괄호 안은 기업 단위 페어드 부트스트랩 95% 신뢰구간입니다.
+| 방법 | 상위 5 이웃 잔차상관 [95% CI] | 서브산업 밖 이웃: 같은 섹터 대비 | GICS 통제 β | 서브산업 P@5 |
+|---|---|---|---|---|
+| TF-IDF (단어 빈도 기준선) | 0.348 [0.332, 0.363] | +0.076 | +0.031 | 0.391 |
+| MiniLM, Item 1 전체 (+center) | 0.332 [0.317, 0.348] | +0.069 | +0.027 | 0.373 |
+| mpnet, 앞 1536토큰 (+center) | 0.329 [0.313, 0.345] | +0.070 | +0.035 | 0.372 |
+| OpenAI 3-large, 앞 1536토큰 (+center) | 0.350 [0.333, 0.366] | +0.083 | +0.034 | 0.398 |
+| OpenAI 3-large, 8천 토큰 청크 (+center) | 0.244 [0.229, 0.261] | +0.007 (유의하지 않음) | +0.012 | 0.195 |
+| MiniLM, **Item 1A** 전체 (+center) | 0.324 [0.307, 0.340] | +0.064 | +0.019 | 0.345 |
+| **앙상블: TF-IDF + OpenAI** | **0.360 [0.345, 0.376]** | **+0.090** | +0.022 | **0.416** |
+| 앙상블: TF-IDF + MiniLM (무료) | 0.348 [0.333, 0.363] | +0.077 | +0.019 | 0.399 |
+| 같은 GICS 서브산업 기업 전체 (기준선) | 0.395 [0.375, 0.416] | – | – | – |
+| 무작위 | 0.082 | – | – | 0.012 |
 
-- **가장 가까운 텍스트 이웃은 같은 서브산업 기업 평균보다 주가가 더 같이 움직입니다.** 차이는 TF-IDF +0.074 [+0.057, +0.090], OpenAI +0.061 [+0.043, +0.080]입니다. 다만 상위 5개 이웃으로 넓히면(0.33~0.35) 서브산업 전체 평균(0.395)보다 낮습니다.
-- **단순한 TF-IDF가 가장 강했습니다.** 1위 이웃 기준으로 가장 좋은 임베딩과 통계적으로 구분되지 않았고, 수익률 상관에서는 MiniLM보다 유의하게 높았습니다(+0.019 [+0.004, +0.034]). 임베딩은 전체 순위(AUC)와 넓은 k에서 앞섰습니다.
-- **모델보다 입력 길이가 중요했습니다.** 같은 OpenAI 모델이라도 청크 하나가 최대 8천 토큰이면 최하위였고, 384토큰으로 자르자 최상위권이 됐습니다. 1위 이웃 수익률 상관은 +0.141 [+0.116, +0.166] 올랐습니다. 같은 조건에서 OpenAI는 무료 모델 mpnet보다 수익률 상관이 조금 높았습니다(+0.022 [+0.009, +0.036]).
-- **평균 벡터 제거는 모든 임베딩에 효과가 있었습니다.** 예를 들어 MiniLM의 1위 이웃 수익률 상관이 +0.035 [+0.022, +0.047] 올랐습니다. v1에서 점수가 0.8 근처에 몰리던 현상은 겉보기 문제가 아니라 변별력 손실이었습니다.
-- **Item 1이 Item 1A보다 사업 유사도를 잘 잡았습니다.** 서브산업 P@1에서 +0.069 [+0.027, +0.113] 앞섰습니다. v1처럼 두 섹션을 섞으면 신호가 약해집니다.
+표의 용어는 다음과 같습니다.
+
+- `+center`: 전체 평균 벡터를 뺀 뒤 잰 코사인 유사도.
+- '서브산업 밖 이웃: 같은 섹터 대비': 자기 서브산업 밖에서만 고른 상위 5개 이웃의 잔차상관에서 같은 섹터·다른 서브산업 회사 평균(0.188)을 뺀 값.
+- 'GICS 통제 β': 같은 서브산업·섹터인지를 통제한 기업쌍 회귀에서, 유사도가 1 표준편차 높을 때 늘어나는 잔차상관.
+- 괄호와 아래 [ ] 구간은 기업 단위 부트스트랩 95% 신뢰구간입니다.
+
+- **텍스트는 GICS가 묶지 않는 연결을 찾고, 그 연결은 실제로 주가에 나타납니다.**
+  - 서브산업 밖에서만 고른 이웃도 같은 섹터 회사보다 더 같이 움직였습니다(TF-IDF +0.076 [+0.067, +0.085]).
+  - GICS를 통제해도 유사도의 효과가 유의했습니다(β +0.03, 설명력 R² 0.058 → 0.08~0.11).
+  - Apple–Skyworks의 잔차상관은 0.22로, Apple과 가장 같이 움직인 회사 상위 1%입니다. TF-IDF는 Skyworks를 Apple의 1위 이웃으로 찾았습니다.
+  - 비슷한 사례로 NVIDIA–Arista(AI 네트워킹, 0.42), Coca-Cola–Ball(캔 공급사, 0.27)이 있습니다.
+- **앙상블(TF-IDF + OpenAI)이 가장 좋았습니다.** 상위 5 이웃 잔차상관이 TF-IDF보다 +0.012 [+0.007, +0.018] 높았고, 분류 밖 연결 지표도 가장 높았습니다. 두 방법의 이웃이 절반 이상 달라서(상위 10개 Jaccard 0.38) 서로 보완합니다.
+- **단순한 TF-IDF는 여전히 강력한 기준선입니다.** 단독 방법 중에서는 OpenAI(짧은 청크)와 통계적으로 같았고(+0.002 [-0.005, +0.009]), 무료 임베딩들보다는 유의하게 나았습니다.
+- **모델보다 입력 길이가 중요했습니다.** 같은 OpenAI 모델이라도 청크 하나가 최대 8천 토큰이면 최하위였고, 384토큰으로 자르자 최상위권이 됐습니다.
+- **평균 벡터 제거는 모든 임베딩에 효과가 있었습니다.** v1에서 점수가 0.8 근처에 몰리던 현상은 겉보기 문제가 아니라 변별력 손실이었습니다.
+- **Item 1이 Item 1A보다 나았습니다.** 같은 모델로 비교하면 Item 1A는 모든 지표에서 뒤졌습니다. 원래 유사도로 보면 GICS를 통제한 효과가 오히려 음수(-0.011)였습니다.
+- **한계:** 상위 5개 이웃 전체로 보면 텍스트 이웃(0.33~0.36)이 GICS 서브산업 전체 평균(0.395)보다 아직 낮습니다. 가장 가까운 1위 이웃만 보면 서브산업 평균보다 높습니다(TF-IDF 0.462).
 
 ## 파이프라인
 
 ```
 S&P 500 목록 ──▶ EDGAR 10-K ──▶ 정제·품질 판정 ──▶ 기업 벡터 ──▶ 평가 ──▶ reports/<name>.md
-(위키피디아)     (edgartools)    표·쪽번호 제거       TF-IDF        GICS·SIC 재현
-                 Item 1 / 1A     추출 오류 걸러냄     SBERT         다음 해 주가 동조성
-                                                      OpenAI        방법 간 일치도
+(위키피디아)     (edgartools)    표·쪽번호 제거       TF-IDF        다음 해 주가 동조성
+                 Item 1 / 1A     추출 오류 걸러냄     SBERT         GICS 밖 연결 (분류 통제)
+                                                      OpenAI        GICS·SIC 재현 (최소 조건)
+                                                      앙상블        신뢰구간 (부트스트랩)
 ```
 
 ## 설치
@@ -89,11 +107,13 @@ uv run tenksim evaluate -c configs/sp500_2024.yaml   # metrics.json + reports/sp
 결과를 살펴보는 명령도 있습니다.
 
 ```console
-$ uv run tenksim neighbors -c configs/smoke.yaml --method minilm --center NVDA -k 3
-NVDA 와 비슷한 기업 (minilm+center)
-  1. AMD    Advanced Micro Devices                   cos=0.604  pct= 95.4
-  2. MSFT   Microsoft                                cos=0.485  pct= 93.4
-  3. CDNS   Cadence Design Systems                   cos=0.484  pct= 92.8
+$ uv run tenksim neighbors -c configs/sp500_2024.yaml --method tfidf-openai AAPL -k 5
+AAPL 와 비슷한 기업 (tfidf-openai)
+  1. BBY    Best Buy                                 score=95.712  pct= 96.9
+  2. QCOM   Qualcomm                                 score=95.556  pct= 96.8
+  3. MSFT   Microsoft                                score=95.474  pct= 96.7
+  4. SWKS   Skyworks Solutions                       score=95.001  pct= 96.4
+  5. GRMN   Garmin                                   score=94.639  pct= 96.1
 
 $ uv run tenksim explain -c configs/smoke.yaml --method minilm SNPS CDNS --top 1
 [1] cosine=0.813
@@ -101,14 +121,16 @@ $ uv run tenksim explain -c configs/smoke.yaml --method minilm SNPS CDNS --top 1
   CDNS: Historically, the industry that provided the tools used by IC engineers was referred to as Electronic Design Automation (“EDA”). ...
 ```
 
-`pct`는 전체 기업쌍 중 백분위(0~100)입니다. 코사인 값 자체는 모델마다 분포가 달라 절대값으로 해석하면 안 됩니다.
-`explain`은 두 회사가 비슷하다고 나온 근거 문단을 보여줍니다.
+`--method`에는 방법 이름(`minilm`), 변형(`minilm+center` 또는 `--center`), 앙상블 이름(`tfidf-openai`)을 쓸 수 있습니다.
+`score`는 방법의 유사도(코사인, 앙상블이면 평균 백분위)이고, `pct`는 전체 기업쌍 중 백분위(0~100)입니다.
+코사인 값 자체는 모델마다 분포가 달라 절대값으로 해석하면 안 됩니다.
+`explain`은 두 회사가 비슷하다고 나온 근거 문단을 보여줍니다(청크 임베딩 방법만).
 
 ## 산출물
 
 | 경로 | 내용 |
 |---|---|
-| `reports/<name>.md` | 결과 리포트: 데이터 품질, 산업분류 재현, 주가 동조성, 방법 간 일치도, 예시 ([smoke 예시](reports/smoke.md)) |
+| `reports/<name>.md` | 결과 리포트: 데이터 품질, 주가 동조성, GICS 밖 연결, 산업분류 재현, 방법 간 일치도, 예시 ([S&P 500](reports/sp500_2024.md), [smoke](reports/smoke.md)) |
 | `data/sections/<year>/<cik>.parquet` | 회사별 10-K 섹션 원문 (모든 실행이 공유) |
 | `data/embeddings.sqlite` | 청크 임베딩 캐시 (모델 + 텍스트 해시 기준) |
 | `data/runs/<name>/` | universe, 정제된 문서, method별 벡터·청크·이웃, `metrics.json` |
@@ -133,8 +155,13 @@ methods:
   - {name: tfidf, kind: tfidf}
   - {name: mpnet-1536, kind: sbert, model: sentence-transformers/all-mpnet-base-v2, doc_tokens: 1536}
   - {name: minilm-risk, kind: sbert, model: sentence-transformers/all-MiniLM-L6-v2, section: risk_factors}
+ensembles:                       # 유사도를 기업쌍 백분위로 바꿔 평균낸 조합
+  - {name: tfidf-mpnet, members: [tfidf, mpnet-1536+center]}
 evaluation:
   k: [1, 5, 10]
+  primary_k: 5                   # 신뢰구간과 '가장 좋은 방법' 선택 기준
+  baseline: tfidf                # 짝지은 차이의 기준 (기본: 첫 method)
+  n_boot: 1000
   labels: [gics_sector, gics_sub_industry, sic2, sic3]
   returns: {start: 2025-01-01, end: 2025-12-31}   # 공시 다음 해 → 미래 정보 없음
 ```

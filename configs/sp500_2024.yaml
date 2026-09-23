@@ -58,6 +58,14 @@ methods:
     max_tokens: 384
     doc_tokens: 1536
 
+# 척도가 다른 유사도를 기업쌍 백분위로 바꿔 평균낸 조합. 두 방법이 서로 다른 이웃을 찾는다면(리포트 5장)
+# 합쳤을 때 나아질 수 있습니다.
+ensembles:
+  - name: tfidf-openai
+    members: [tfidf, openai-3-large-1536+center]
+  - name: tfidf-minilm   # 무료 방법만으로 만든 조합
+    members: [tfidf, minilm+center]
+
 evaluation:
   k: [1, 5, 10]
   labels: [gics_sector, gics_sub_industry, sic2, sic3]

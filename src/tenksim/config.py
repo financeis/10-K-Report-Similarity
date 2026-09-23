@@ -100,8 +100,52 @@ class ReturnsConfig(_Strict):
 
 class EvaluationConfig(_Strict):
     k: list[int] = [1, 5, 10]
+    primary_k: int | None = None
+    """신뢰구간과 '가장 좋은 방법' 선택에 쓰는 k. 비우면 5(목록에 없으면 가장 큰 k)."""
     labels: list[Label] = ["gics_sector", "gics_sub_industry", "sic2", "sic3"]
+    baseline: str | None = None
+    """짝지은 차이를 잴 기준 방법. 비우면 methods의 첫 항목(보통 tfidf)."""
+    n_boot: int = 1000
+    """부트스트랩 재표집 횟수. 기업쌍 회귀는 계산량 때문에 이의 1/5만 쓴다."""
     returns: ReturnsConfig | None = None
+
+    @model_validator(mode="after")
+    def _check_primary_k(self) -> EvaluationConfig:
+        if self.primary_k is not None and self.primary_k not in self.k:
+            raise ValueError(
+                f"evaluation.primary_k({self.primary_k})는 k 목록 {self.k}에 있어야 합니다"
+            )
+        return self
+
+    @property
+    def main_k(self) -> int:
+        if self.primary_k is not None:
+            return self.primary_k
+        return 5 if 5 in self.k else max(self.k)
+
+
+class EnsembleConfig(_Strict):
+    """여러 방법의 유사도를 기업쌍 백분위로 바꿔 평균낸 조합."""
+
+    name: str
+    members: list[str]
+    """방법 이름 또는 '이름+center' 변형."""
+    weights: list[float] | None = None
+
+    @field_validator("name")
+    @classmethod
+    def _safe_name(cls, v: str) -> str:
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", v):
+            raise ValueError(f"ensemble 이름은 영문/숫자/._- 만 쓸 수 있습니다: {v!r}")
+        return v
+
+    @model_validator(mode="after")
+    def _check_members(self) -> EnsembleConfig:
+        if len(self.members) < 2:
+            raise ValueError(f"ensemble {self.name!r}: members가 2개 이상이어야 합니다")
+        if self.weights is not None and len(self.weights) != len(self.members):
+            raise ValueError(f"ensemble {self.name!r}: weights와 members 개수가 다릅니다")
+        return self
 
 
 class Config(_Strict):
@@ -116,6 +160,7 @@ class Config(_Strict):
     """dense 방법마다 평균 벡터를 뺀(centering) 버전도 함께 평가한다."""
     top_k: int = 10
     """neighbors 결과에 저장할 이웃 수."""
+    ensembles: list[EnsembleConfig] = Field(default_factory=list)
     evaluation: EvaluationConfig = Field(default_factory=EvaluationConfig)
 
     @model_validator(mode="after")
@@ -127,7 +172,36 @@ class Config(_Strict):
         missing = sorted({m.section for m in self.methods} - set(self.filings.sections))
         if missing:
             raise ValueError(f"methods가 쓰는 섹션 {missing}이 filings.sections에 없습니다")
+        variants = set(self.variant_names)
+        for ens in self.ensembles:
+            if ens.name in variants:
+                raise ValueError(f"ensemble 이름 {ens.name!r}이 method 이름과 겹칩니다")
+            unknown = [m for m in ens.members if m not in variants]
+            if unknown:
+                raise ValueError(
+                    f"ensemble {ens.name!r}: 없는 변형 {unknown} (가능: {sorted(variants)})"
+                )
+        known = variants | {e.name for e in self.ensembles}
+        if self.evaluation.baseline and self.evaluation.baseline not in known:
+            raise ValueError(f"evaluation.baseline {self.evaluation.baseline!r}이 없는 이름입니다")
         return self
+
+    @property
+    def variant_names(self) -> list[str]:
+        """평가되는 유사도 변형 이름: 방법마다 원래 버전과(dense면) '+center' 버전."""
+        out = []
+        for m in self.methods:
+            out.append(m.name)
+            if self.center_variants and m.kind != "tfidf":
+                out.append(m.name + "+center")
+        return out
+
+    @property
+    def baseline_name(self) -> str:
+        return self.evaluation.baseline or self.methods[0].name
+
+    def ensemble(self, name: str) -> EnsembleConfig | None:
+        return next((e for e in self.ensembles if e.name == name), None)
 
     @property
     def run_dir(self) -> Path:

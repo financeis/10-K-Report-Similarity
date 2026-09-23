@@ -2,7 +2,15 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from tenksim.evaluate import agreement, label_frame, label_metrics, pair_auc, precision_at_k
+from tenksim.evaluate import (
+    agreement,
+    bootstrap_means,
+    label_frame,
+    label_metrics,
+    pair_auc,
+    precision_at_k,
+    precision_per_firm,
+)
 
 
 def block_similarity(labels: list[str], noise: float = 0.0, seed: int = 0) -> np.ndarray:
@@ -66,3 +74,28 @@ def test_agreement_identity():
     sim = block_similarity(list("aabbcc"), noise=0.1)
     a = agreement(sim, sim, k=2)
     assert a["spearman"] == 1.0 and a["jaccard@2"] == 1.0
+
+
+def test_precision_per_firm_marks_missing_labels():
+    labels = np.array(["a", "a", None, "b", "b"], dtype=object)
+    sim = block_similarity(["a", "a", "x", "b", "b"], noise=0.01)
+    per = precision_per_firm(sim, labels, k=1)
+    assert np.isnan(per[2]) and np.nanmean(per) == 1.0
+
+
+def test_bootstrap_paired_difference_is_tighter():
+    rng = np.random.default_rng(0)
+    difficulty = rng.normal(0, 1, 400)  # 회사마다 다른 난이도가 두 방법에 똑같이 들어간다
+    a = difficulty + 0.10 + rng.normal(0, 0.1, 400)
+    b = difficulty + rng.normal(0, 0.1, 400)
+    out = bootstrap_means({"b": b, "a": a}, n_boot=500, reference="b")
+    assert out["a"]["lo"] <= out["a"]["mean"] <= out["a"]["hi"]
+    assert "diff" not in out["b"]
+    assert 0.05 < out["a"]["diff_lo"] < out["a"]["diff"] < out["a"]["diff_hi"] < 0.15
+    # 짝지은 차이의 구간이 각 평균의 구간보다 훨씬 좁다
+    assert out["a"]["diff_hi"] - out["a"]["diff_lo"] < (out["a"]["hi"] - out["a"]["lo"]) / 3
+
+
+def test_bootstrap_ignores_nan():
+    out = bootstrap_means({"x": np.array([1.0, np.nan, 3.0, np.nan])}, n_boot=200)
+    assert out["x"]["mean"] == 2.0

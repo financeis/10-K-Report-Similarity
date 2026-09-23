@@ -1,7 +1,14 @@
 import numpy as np
 from scipy import sparse
 
-from tenksim.similarity import cosine_matrix, explain_pair, pair_percentiles, pool_chunks, top_k
+from tenksim.similarity import (
+    cosine_matrix,
+    ensemble_similarity,
+    explain_pair,
+    pair_percentiles,
+    pool_chunks,
+    top_k,
+)
 
 
 def test_pool_chunks_is_token_weighted_mean():
@@ -56,3 +63,15 @@ def test_explain_pair_uses_each_chunk_once():
     pairs = explain_pair(["a0", "a1", "a2"], a, ["b0", "b1", "b2"], b, top=2)
     assert [(ta, tb) for _, ta, tb in pairs] == [("a0", "b0"), ("a2", "b2")]
     assert pairs[0][0] >= pairs[1][0]
+
+
+def test_ensemble_similarity_averages_ranks():
+    a = np.array([[1.0, 0.9, 0.1], [0.9, 1.0, 0.5], [0.1, 0.5, 1.0]])
+    b = np.array([[1.0, 0.0, 0.2], [0.0, 1.0, 0.1], [0.2, 0.1, 1.0]])  # 척도가 전혀 다르다
+    e = ensemble_similarity([a, b])
+    np.testing.assert_allclose(np.diag(e), 100)
+    np.testing.assert_allclose(e, e.T)
+    # a 순위: (0,1)=100 (1,2)=50 (0,2)=0 / b 순위: (0,2)=100 (1,2)=50 (0,1)=0
+    assert e[0, 1] == 50 and e[1, 2] == 50 and e[0, 2] == 50
+    heavy = ensemble_similarity([a, b], weights=[3, 1])
+    assert heavy[0, 1] > heavy[0, 2]

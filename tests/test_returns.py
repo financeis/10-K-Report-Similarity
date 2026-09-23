@@ -3,10 +3,13 @@ import pandas as pd
 
 from tenksim.returns import (
     correlation_matrices,
+    incremental_effect,
     label_peers,
     peer_correlation,
     random_baseline,
+    random_per_firm,
     residualize,
+    top_k_within,
     yahoo_symbol,
 )
 
@@ -60,3 +63,41 @@ def test_peer_helpers():
     assert [p.tolist() for p in peers] == [[1], [0], []]
     assert peer_correlation(corr, peers) == 0.6  # 회사 2는 peer가 없어 빠진다
     assert np.isclose(random_baseline(corr), (0.6 + 0.1 + 0.2) / 3)
+
+
+def test_top_k_within_and_random_per_firm():
+    sim = np.array(
+        [[1.0, 0.9, 0.5, 0.1], [0.9, 1.0, 0.2, 0.3], [0.5, 0.2, 1.0, 0.8], [0.1, 0.3, 0.8, 1.0]]
+    )
+    allowed = np.array([[0, 0, 1, 1], [0, 0, 1, 1], [1, 1, 0, 0], [1, 1, 0, 0]], dtype=bool)
+    nb = top_k_within(sim, allowed, 1)
+    assert [n.tolist() for n in nb] == [[2], [3], [0], [1]]  # 허용된 상대 중에서만 고른다
+    corr = np.array(
+        [[1.0, 0.5, 0.2, 0.4], [0.5, 1.0, 0.0, 0.6], [0.2, 0.0, 1.0, 0.3], [0.4, 0.6, 0.3, 1.0]]
+    )
+    np.testing.assert_allclose(random_per_firm(corr, allowed), [0.3, 0.3, 0.1, 0.5])
+    np.testing.assert_allclose(random_per_firm(corr)[0], (0.5 + 0.2 + 0.4) / 3)
+
+
+def make_linked_world(text_matters: bool, n: int = 60, seed: int = 0):
+    """산업(레이블)과 별개로 '텍스트로만 보이는 연결'이 수익률에 영향을 주는지 조절한다."""
+    rng = np.random.default_rng(seed)
+    industry = np.repeat(np.arange(6), n // 6)
+    hidden = rng.normal(size=(n, 3))  # 공급망 같은 숨은 연결
+    link = hidden @ hidden.T
+    same = industry[:, None] == industry[None, :]
+    corr = 0.3 * same + (0.05 * link if text_matters else 0) + rng.normal(0, 0.02, (n, n))
+    corr = (corr + corr.T) / 2
+    np.fill_diagonal(corr, 1.0)
+    sim = link + rng.normal(0, 0.5, (n, n))
+    sim = (sim + sim.T) / 2
+    return sim, corr, same, np.ones((n, n), dtype=bool)
+
+
+def test_incremental_effect_detects_links_beyond_labels():
+    sim, corr, same, parent = make_linked_world(text_matters=True)
+    r = incremental_effect(sim, corr, same, parent, n_boot=50)
+    assert r["lo"] > 0 and r["r2_full"] > r["r2_gics"]
+    sim, corr, same, parent = make_linked_world(text_matters=False)
+    r = incremental_effect(sim, corr, same, parent, n_boot=50)
+    assert r["lo"] < 0 < r["hi"]  # 레이블로 다 설명되면 텍스트의 추가 효과는 0 근처

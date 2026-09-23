@@ -80,18 +80,21 @@ def _find(res: pipeline.MethodResult, ticker: str) -> int:
 
 
 def cmd_neighbors(cfg: Config, args) -> None:
-    res = pipeline.load_method(cfg, args.method)
-    sims = res.similarity_variants(cfg.center_variants)
     variant = args.method + (pipeline.CENTER_SUFFIX if args.center else "")
-    if variant not in sims:
-        raise SystemExit(f"{variant}: 없는 변형입니다 (가능: {list(sims)})")
-    table = pipeline.neighbors_table(res, sims[variant], args.k)
-    table = table[table["ticker"] == res.companies.at[_find(res, args.ticker), "ticker"]]
+    try:
+        companies, sim = pipeline.similarity_for(cfg, variant)
+    except KeyError as exc:
+        raise SystemExit(str(exc)) from exc
+    table = pipeline.neighbors_table(companies, sim, args.k)
+    matches = companies["ticker"].str.upper() == args.ticker.upper()
+    if not matches.any():
+        raise SystemExit(f"{args.ticker}: 분석 대상에 없습니다 (품질 판정에서 빠졌을 수 있음)")
+    table = table[table["ticker"] == companies.loc[matches, "ticker"].iloc[0]]
     print(f"{args.ticker.upper()} 와 비슷한 기업 ({variant})")
     for r in table.itertuples():
         print(
             f"{r.rank:>3}. {r.neighbor_ticker:<6} {r.neighbor_name[:40]:<40} "
-            f"cos={r.cosine:.3f}  pct={r.percentile:5.1f}"
+            f"score={r.score:.3f}  pct={r.percentile:5.1f}"
         )
 
 

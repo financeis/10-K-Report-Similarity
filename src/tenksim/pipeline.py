@@ -13,6 +13,8 @@ import logging
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
+from functools import partial
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -20,16 +22,26 @@ from scipy import sparse
 
 from .config import Config, MethodConfig
 from .embed import DenseEmbedder, EmbeddingCache, TfidfMethod, build_method
-from .evaluate import agreement, label_frame, label_metrics
+from .evaluate import (
+    agreement,
+    bootstrap_means,
+    label_frame,
+    label_metrics,
+    precision_per_firm,
+)
 from .filings import ingest
 from .returns import (
     correlation_matrices,
+    incremental_effect,
     label_peers,
     load_prices,
+    peer_corr_per_firm,
     peer_correlation,
     random_baseline,
+    random_per_firm,
+    top_k_within,
 )
-from .similarity import cosine_matrix, pair_percentiles, pool_chunks, top_k
+from .similarity import cosine_matrix, ensemble_similarity, pair_percentiles, pool_chunks, top_k
 from .text import CleanedSection, assess, chunk_text, clean_section, duplicate_share
 from .universe import build_universe
 
@@ -262,26 +274,56 @@ def load_methods(cfg: Config) -> dict[str, MethodResult]:
 # ---------------------------------------------------------------- neighbors / evaluate
 
 
-def neighbors_table(res: MethodResult, sim: np.ndarray, k: int) -> pd.DataFrame:
+def neighbors_table(companies: pd.DataFrame, sim: np.ndarray, k: int) -> pd.DataFrame:
+    """회사마다 상위 k 이웃. score는 방법의 유사도(코사인, 앙상블이면 평균 백분위)."""
     idx, scores = top_k(sim, k)
     pct = pair_percentiles(sim)
-    comp = res.companies
     rows = []
-    for i in range(len(comp)):
+    for i in range(len(companies)):
         for rank, (j, score) in enumerate(zip(idx[i], scores[i], strict=True), start=1):
             rows.append(
                 {
-                    "cik": comp.at[i, "cik"],
-                    "ticker": comp.at[i, "ticker"],
+                    "cik": companies.at[i, "cik"],
+                    "ticker": companies.at[i, "ticker"],
                     "rank": rank,
-                    "neighbor_cik": comp.at[j, "cik"],
-                    "neighbor_ticker": comp.at[j, "ticker"],
-                    "neighbor_name": comp.at[j, "name"],
-                    "cosine": float(score),
+                    "neighbor_cik": companies.at[j, "cik"],
+                    "neighbor_ticker": companies.at[j, "ticker"],
+                    "neighbor_name": companies.at[j, "name"],
+                    "score": float(score),
                     "percentile": float(pct[i, j]),
                 }
             )
     return pd.DataFrame(rows)
+
+
+def neighbors_path(cfg: Config, variant: str) -> Path:
+    if cfg.ensemble(variant) is not None:
+        return cfg.run_dir / "ensembles" / variant / "neighbors.parquet"
+    center = variant.endswith(CENTER_SUFFIX)
+    name = variant.removesuffix(CENTER_SUFFIX)
+    return cfg.method_dir(name) / ("neighbors_center.parquet" if center else "neighbors.parquet")
+
+
+def similarity_for(cfg: Config, name: str) -> tuple[pd.DataFrame, np.ndarray]:
+    """방법·변형·앙상블 이름 하나의 (회사 목록, 유사도 행렬)."""
+    ens = cfg.ensemble(name)
+    if ens is None:
+        res = load_method(cfg, name.removesuffix(CENTER_SUFFIX))
+        sims = res.similarity_variants(cfg.center_variants)
+        if name not in sims:
+            raise KeyError(f"{name}: 없는 변형입니다 (가능: {list(sims)})")
+        return res.companies, sims[name]
+    bases = list(dict.fromkeys(m.removesuffix(CENTER_SUFFIX) for m in ens.members))
+    results = {b: load_method(cfg, b) for b in bases}
+    common_set = set.intersection(*(set(r.companies["cik"]) for r in results.values()))
+    first = results[bases[0]].companies
+    companies = first[first["cik"].isin(common_set)].reset_index(drop=True)
+    members = []
+    for m in ens.members:
+        res = results[m.removesuffix(CENTER_SUFFIX)]
+        pos = res.positions(list(companies["cik"]))
+        members.append(res.similarity_variants(cfg.center_variants)[m][np.ix_(pos, pos)])
+    return companies, ensemble_similarity(members, ens.weights)
 
 
 def stage_evaluate(
@@ -290,26 +332,37 @@ def stage_evaluate(
     # 모든 방법을 같은 회사 집합에서 비교해야 공정하다
     common_set = set.intersection(*(set(r.companies["cik"]) for r in results.values()))
     common = [c for c in universe["cik"] if c in common_set]
-    labels = label_frame(universe, docs).reindex(common)[list(cfg.evaluation.labels)]
+    companies = universe.set_index("cik").loc[common, ["ticker", "name"]].reset_index()
+    all_labels = label_frame(universe, docs).reindex(common)
+    labels = all_labels[list(cfg.evaluation.labels)]
 
     sims: dict[str, np.ndarray] = {}
     for res in results.values():
         pos = res.positions(common)
         for variant, sim in res.similarity_variants(cfg.center_variants).items():
             sims[variant] = sim[np.ix_(pos, pos)]
-            suffix = "_center" if variant.endswith(CENTER_SUFFIX) else ""
-            neighbors_table(res, sim, cfg.top_k).to_parquet(
-                cfg.method_dir(res.name) / f"neighbors{suffix}.parquet", index=False
+            neighbors_table(res.companies, sim, cfg.top_k).to_parquet(
+                neighbors_path(cfg, variant), index=False
             )
+    for ens in cfg.ensembles:
+        sims[ens.name] = ensemble_similarity([sims[m] for m in ens.members], ens.weights)
+        path = neighbors_path(cfg, ens.name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        neighbors_table(companies, sims[ens.name], cfg.top_k).to_parquet(path, index=False)
 
-    ks = cfg.evaluation.k
+    ev = cfg.evaluation
+    ks = ev.k
     metrics: dict = {
         "name": cfg.name,
         "created": datetime.now().isoformat(timespec="seconds"),
         "n_companies": len(common),
+        "baseline": cfg.baseline_name,
+        "main_k": ev.main_k,
         "labels": {v: label_metrics(s, labels, ks) for v, s in sims.items()},
+        "labels_ci": _label_ci(cfg, sims, labels),
         "agreement": [],
         "returns": None,
+        "beyond": None,
     }
     names = list(sims)
     for a in range(len(names)):
@@ -317,8 +370,10 @@ def stage_evaluate(
             metrics["agreement"].append(
                 {"a": names[a], "b": names[b], **agreement(sims[names[a]], sims[names[b]], max(ks))}
             )
-    if cfg.evaluation.returns is not None:
-        metrics["returns"] = _returns_metrics(cfg, universe, common, sims, labels)
+    if ev.returns is not None:
+        metrics["returns"], metrics["beyond"] = _returns_metrics(
+            cfg, universe, common, companies, sims, all_labels
+        )
 
     metrics = _nan_to_none(metrics)
     (cfg.run_dir / "metrics.json").write_text(
@@ -332,14 +387,29 @@ def load_metrics(cfg: Config) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _label_ci(cfg: Config, sims: dict[str, np.ndarray], labels: pd.DataFrame) -> dict:
+    """주 레이블(서브산업이 있으면 서브산업)의 P@k 신뢰구간과 기준 방법 대비 차이."""
+    name = "gics_sub_industry" if "gics_sub_industry" in labels.columns else labels.columns[0]
+    values = labels[name].to_numpy(dtype=object)
+    out: dict = {"label": name}
+    for k in cfg.evaluation.k:
+        per_firm = {v: precision_per_firm(s, values, k) for v, s in sims.items()}
+        out[f"p@{k}"] = bootstrap_means(
+            per_firm, n_boot=cfg.evaluation.n_boot, reference=cfg.baseline_name
+        )
+    return out
+
+
 def _returns_metrics(
     cfg: Config,
     universe: pd.DataFrame,
     common: list[int],
+    companies: pd.DataFrame,
     sims: dict[str, np.ndarray],
-    labels: pd.DataFrame,
-) -> dict:
-    rc = cfg.evaluation.returns
+    all_labels: pd.DataFrame,
+) -> tuple[dict, dict | None]:
+    ev = cfg.evaluation
+    rc = ev.returns
     tickers = universe.set_index("cik").loc[common, "ticker"].tolist()
     prices = load_prices(
         tickers, rc.market, rc.start, rc.end, cfg.run_dir / f"prices_{rc.start}_{rc.end}.parquet"
@@ -352,21 +422,122 @@ def _returns_metrics(
         "end": str(rc.end),
         "methods": {},
         "baselines": {},
+        "ci": {},
     }
     for kind, corr in (("resid", resid), ("raw", raw)):
         c = corr[np.ix_(idx, idx)]
+        per_k: dict[int, dict[str, np.ndarray]] = {k: {} for k in ev.k}
         for variant, sim in sims.items():
             s = sim[np.ix_(idx, idx)]
-            for k in cfg.evaluation.k:
+            for k in ev.k:
                 nb, _ = top_k(s, k)
-                out["methods"].setdefault(variant, {})[f"{kind}@{k}"] = peer_correlation(
-                    c, list(nb)
-                )
-        for label in labels.columns:
-            peers = label_peers(labels[label].to_numpy(dtype=object)[idx])
+                values = peer_corr_per_firm(c, list(nb))
+                per_k[k][variant] = values
+                out["methods"].setdefault(variant, {})[f"{kind}@{k}"] = float(np.nanmean(values))
+        baselines = {}
+        for label in ev.labels:
+            peers = label_peers(all_labels[label].to_numpy(dtype=object)[idx])
+            baselines[f"baseline:{label}"] = peer_corr_per_firm(c, peers)
             out["baselines"].setdefault(label, {})[kind] = peer_correlation(c, peers)
+        baselines["baseline:random"] = random_per_firm(c)
         out["baselines"].setdefault("random", {})[kind] = random_baseline(c)
+        for k in ev.k:
+            out["ci"][f"{kind}@{k}"] = bootstrap_means(
+                {**per_k[k], **baselines}, n_boot=ev.n_boot, reference=cfg.baseline_name
+            )
+
+    key = f"resid@{ev.main_k}"
+    out["best"] = max(out["methods"], key=lambda v: out["methods"][v][key])
+    sub_idx = companies.iloc[idx].reset_index(drop=True)
+    beyond = _beyond_metrics(
+        cfg, sims, idx, resid[np.ix_(idx, idx)], all_labels.iloc[idx], sub_idx, out["best"]
+    )
+    return out, beyond
+
+
+def _beyond_metrics(
+    cfg: Config,
+    sims: dict[str, np.ndarray],
+    idx: np.ndarray,
+    corr: np.ndarray,
+    labels: pd.DataFrame,
+    companies: pd.DataFrame,
+    best: str,
+) -> dict | None:
+    """GICS가 같은 회사로 묶지 않는 연결을 텍스트가 찾는지.
+
+    1) 서브산업(또는 섹터) 밖에서만 이웃을 골라도 주가가 같이 움직이는가.
+       분류 밖에서 무작위로 고른 회사, 그리고 '같은 섹터·다른 서브산업' 회사와 비교한다.
+    2) 기업쌍 회귀로 GICS를 통제한 뒤에도 유사도가 동조성을 설명하는가.
+    """
+    if "gics_sub_industry" not in labels or "gics_sector" not in labels:
+        return None
+    sub = labels["gics_sub_industry"].to_numpy(dtype=object)
+    sec = labels["gics_sector"].to_numpy(dtype=object)
+    valid = np.array([isinstance(s, str) for s in sub]) & np.array(
+        [isinstance(s, str) for s in sec]
+    )
+    if valid.sum() < 4:
+        return None
+    pair_ok = valid[:, None] & valid[None, :]
+    same_sub = (sub[:, None] == sub[None, :]) & pair_ok
+    same_sec = (sec[:, None] == sec[None, :]) & pair_ok
+    outside_sub, outside_sec = pair_ok & ~same_sub, pair_ok & ~same_sec
+    ev = cfg.evaluation
+    k = ev.main_k
+
+    random_outside_sub = random_per_firm(corr, outside_sub)
+    random_sector_peer = random_per_firm(corr, same_sec & ~same_sub)
+    random_outside_sec = random_per_firm(corr, outside_sec)
+    texts_sub, lift_sub, lift_sector, texts_sec, lift_sec, regression = {}, {}, {}, {}, {}, {}
+    for variant, full_sim in sims.items():
+        sim = full_sim[np.ix_(idx, idx)]
+        texts_sub[variant] = peer_corr_per_firm(corr, top_k_within(sim, outside_sub, k))
+        texts_sec[variant] = peer_corr_per_firm(corr, top_k_within(sim, outside_sec, k))
+        lift_sub[variant] = texts_sub[variant] - random_outside_sub
+        lift_sector[variant] = texts_sub[variant] - random_sector_peer
+        lift_sec[variant] = texts_sec[variant] - random_outside_sec
+        regression[variant] = incremental_effect(
+            sim, corr, same_sub, same_sec, n_boot=max(50, ev.n_boot // 5)
+        )
+    boot = partial(bootstrap_means, n_boot=ev.n_boot)
+    out = {
+        "k": k,
+        "outside_sub": boot(texts_sub),
+        "lift_outside_sub": boot(lift_sub),
+        "lift_vs_sector_peer": boot(lift_sector),
+        "outside_sector": boot(texts_sec),
+        "lift_outside_sector": boot(lift_sec),
+        "baselines": {
+            "random_outside_sub": _mean(random_outside_sub),
+            "random_sector_peer": _mean(random_sector_peer),
+            "random_outside_sector": _mean(random_outside_sec),
+        },
+        "regression": regression,
+        "example_variant": best,
+        "examples": {},
+    }
+    # 가장 좋은 방법으로 찾은 '서브산업 밖' 이웃 예시
+    tick = companies["ticker"].to_numpy()
+    neighbors = top_k_within(sims[best][np.ix_(idx, idx)], outside_sub, 3)
+    for t in _example_tickers(tick):
+        i = int(np.flatnonzero(tick == t)[0])
+        out["examples"][t] = {
+            "sub_industry": sub[i],
+            "neighbors": [
+                {"ticker": tick[j], "sub_industry": sub[j], "resid_corr": float(corr[i, j])}
+                for j in neighbors[i]
+            ],
+        }
     return out
+
+
+EXAMPLE_TICKERS = ["AAPL", "MSFT", "NVDA", "JPM", "XOM", "PFE", "AMZN", "KO", "NEE", "PLD"]
+
+
+def _example_tickers(tickers: np.ndarray) -> list[str]:
+    present = [t for t in EXAMPLE_TICKERS if t in set(tickers)]
+    return present if len(present) >= 3 else list(tickers[:8])
 
 
 # ---------------------------------------------------------------- helpers
@@ -376,6 +547,12 @@ def _require(path, stage: str):
     if not path.exists():
         raise FileNotFoundError(f"{path}가 없습니다. 먼저 'tenksim {stage}'를 실행하세요.")
     return path
+
+
+def _mean(values: np.ndarray) -> float:
+    """NaN을 뺀 평균. 해당하는 회사가 하나도 없으면 NaN (경고 없이)."""
+    values = np.asarray(values, dtype=np.float64)
+    return float(np.nanmean(values)) if np.isfinite(values).any() else float("nan")
 
 
 def _nan_to_none(obj):

@@ -108,7 +108,8 @@ def cfg(tmp_path):
                 {"name": "tfidf", "kind": "tfidf", "max_df": 0.9, "min_df": 1},
                 {"name": "fake", "kind": "sbert", "model": "fake"},
             ],
-            "evaluation": {"k": [1, 2], "labels": ["gics_sector", "sic2"]},
+            "ensembles": [{"name": "ens", "members": ["tfidf", "fake+center"]}],
+            "evaluation": {"k": [1, 2], "labels": ["gics_sector", "sic2"], "n_boot": 100},
         }
     )
 
@@ -134,7 +135,10 @@ def test_end_to_end_offline(cfg, monkeypatch):
 
     metrics = pipeline.stage_evaluate(cfg, universe, docs, pipeline.load_methods(cfg))
     assert metrics["n_companies"] == 9
-    assert set(metrics["labels"]) == {"tfidf", "fake", "fake+center"}
+    assert set(metrics["labels"]) == {"tfidf", "fake", "fake+center", "ens"}
+    ci = metrics["labels_ci"]["p@2"]
+    assert ci["tfidf"]["lo"] <= ci["tfidf"]["mean"] <= ci["tfidf"]["hi"]
+    assert "diff" in ci["ens"] and "diff" not in ci["tfidf"]  # 기준 방법 자신은 차이가 없다
     for variant in metrics["labels"].values():
         assert variant["gics_sector"]["auc"] > 0.9  # 주제 단어가 분명해서 쉽게 맞혀야 한다
     assert (
@@ -144,9 +148,9 @@ def test_end_to_end_offline(cfg, monkeypatch):
     report = write_report(cfg, metrics, docs, universe).read_text(encoding="utf-8")
     for heading in (
         "## 1. 데이터 품질",
-        "## 2. 산업분류 재현",
-        "## 4. 방법 간 일치도",
-        "## 5. 예시",
+        "## 4. 산업분류 재현",
+        "## 5. 방법 간 일치도",
+        "## 6. 예시",
     ):
         assert heading in report
     assert "BAD" in report and "suspect" in report
@@ -221,3 +225,70 @@ def test_overlapping_sections_are_both_excluded(cfg):
     assert docs.loc["business", "note"] == "duplicate:risk_factors"
     assert docs.loc["risk_factors", "note"] == "duplicate:business"
     assert (docs["status"] == "suspect").all()
+
+
+def fake_prices(tickers, market, start, end, cache_path):
+    """같은 주제(산업) 회사끼리 공통 요인을 갖는 가짜 주가."""
+    rng = np.random.default_rng(0)
+    n = 250
+    market_ret = rng.normal(0, 0.01, n)
+    factors = {t: rng.normal(0, 0.01, n) for t in TOPICS}
+    data = {market: market_ret}
+    for i, t in enumerate(tickers):
+        data[t] = market_ret + factors[list(TOPICS)[i % 3]] + rng.normal(0, 0.01, n)
+    index = pd.bdate_range(start, periods=n)
+    return pd.DataFrame({k: 100 * np.cumprod(1 + v) for k, v in data.items()}, index=index)
+
+
+def test_returns_and_beyond_gics_sections(cfg, monkeypatch):
+    from datetime import date
+
+    from tenksim.config import ReturnsConfig
+
+    fake = FakeEmbedder()
+    real_build = pipeline.build_method
+    monkeypatch.setattr(
+        pipeline, "build_method", lambda m: fake if m.kind == "sbert" else real_build(m)
+    )
+    monkeypatch.setattr(pipeline, "load_prices", fake_prices)
+    cfg.evaluation.returns = ReturnsConfig(
+        start=date(2025, 1, 1), end=date(2025, 12, 31), min_obs=50
+    )
+    universe, records = make_inputs()
+    cfg.run_dir.mkdir(parents=True)
+    universe.to_parquet(cfg.run_dir / "universe.parquet", index=False)
+    docs = pipeline.stage_documents(cfg, universe, records)
+    pipeline.stage_methods(cfg, universe, docs)
+
+    metrics = pipeline.stage_evaluate(cfg, universe, docs, pipeline.load_methods(cfg))
+    rm = metrics["returns"]
+    assert rm["n"] == 9 and rm["best"] in metrics["labels"]
+    entry = rm["ci"]["resid@2"]["fake+center"]
+    assert entry["lo"] <= entry["mean"] <= entry["hi"]
+    # 텍스트 이웃(같은 주제)은 무작위보다 훨씬 같이 움직여야 한다
+    assert rm["methods"]["tfidf"]["resid@1"] > rm["baselines"]["random"]["resid"] + 0.2
+    beyond = metrics["beyond"]
+    assert set(beyond["regression"]) == set(metrics["labels"])
+    assert all(np.isfinite(r["beta"]) for r in beyond["regression"].values())
+    assert beyond["examples"]
+
+    report = write_report(cfg, metrics, docs, universe).read_text(encoding="utf-8")
+    for heading in ("## 2. 주가 동조성", "## 3. GICS가 묶지 않는 연결", "### 3.3 예시"):
+        assert heading in report
+
+
+def test_similarity_for_ensemble(cfg, monkeypatch):
+    fake = FakeEmbedder()
+    real_build = pipeline.build_method
+    monkeypatch.setattr(
+        pipeline, "build_method", lambda m: fake if m.kind == "sbert" else real_build(m)
+    )
+    universe, records = make_inputs()
+    cfg.run_dir.mkdir(parents=True)
+    docs = pipeline.stage_documents(cfg, universe, records)
+    pipeline.stage_methods(cfg, universe, docs)
+    companies, sim = pipeline.similarity_for(cfg, "ens")
+    assert len(companies) == 9 and sim.shape == (9, 9)
+    assert np.allclose(sim, sim.T) and (np.diag(sim) == 100).all()
+    with pytest.raises(KeyError):
+        pipeline.similarity_for(cfg, "tfidf+center")  # TF-IDF에는 +center 변형이 없다
