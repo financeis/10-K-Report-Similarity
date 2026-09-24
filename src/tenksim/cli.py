@@ -119,6 +119,38 @@ def cmd_explain(cfg: Config, args) -> None:
             print(textwrap.indent(textwrap.shorten(text, 500, placeholder=" ..."), f"  {label}: "))
 
 
+def cmd_mentions(cfg: Config, args) -> None:
+    from .relations.stages import load_mentions, stage_mentions
+
+    tables = load_mentions(cfg) if args.cached else stage_mentions(cfg)
+    if args.ticker:
+        _print_mentions(tables, args.ticker, args.all)
+
+
+def _print_mentions(tables, ticker: str, show_excluded: bool) -> None:
+    nodes = tables.nodes.set_index("node_id")
+    match = nodes.index[nodes["ticker"].fillna("").str.upper() == ticker.upper()]
+    if not len(match):
+        raise SystemExit(f"{ticker}: 기업 목록에 없습니다")
+    node = match[0]
+    label = nodes["name"].to_dict()
+    m = tables.mentions.merge(tables.spans[["span_id", "text", "lead_text"]], on="span_id")
+    if not show_excluded:
+        m = m[m["excluded"].isna()]
+    for title, rows, other in (
+        (f"{ticker.upper()}의 10-K가 언급한 회사", m[m["doc_node"] == node], "target_node"),
+        (f"{ticker.upper()}를 언급한 회사", m[m["target_node"] == node], "doc_node"),
+    ):
+        print(f"\n== {title}: {rows[other].nunique()}곳, 언급 {len(rows)}건")
+        for other_node, g in sorted(rows.groupby(other), key=lambda kv: -len(kv[1])):
+            print(f"\n  {label.get(other_node, other_node)} ({other_node}) — {len(g)}건")
+            for r in g.drop_duplicates("span_id").head(3).itertuples():
+                flag = f" [제외: {r.excluded}]" if isinstance(r.excluded, str) else ""
+                text = f"[{r.lead_text}] {r.text}" if isinstance(r.lead_text, str) else r.text
+                snippet = textwrap.shorten(text, 300, placeholder=" ...")
+                print(textwrap.indent(snippet, f"    {r.section[:4]}{flag} | "))
+
+
 def main(argv: list[str] | None = None) -> None:
     # 설치 위치가 아니라 명령을 실행한 폴더에서 .env를 찾는다
     load_dotenv(find_dotenv(usecwd=True))
@@ -153,6 +185,11 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("ticker_b")
     p.add_argument("--method", required=True)
     p.add_argument("--top", type=int, default=3)
+
+    p = add("mentions", "관계도: 10-K 본문의 회사 이름 언급 찾기", cmd_mentions)
+    p.add_argument("--ticker", help="이 회사의 언급을 출력")
+    p.add_argument("--all", action="store_true", help="제외된 언급(임원 약력 등)도 출력")
+    p.add_argument("--cached", action="store_true", help="다시 찾지 않고 저장된 결과만 출력")
 
     args = parser.parse_args(argv)
     _setup_logging(args.verbose)

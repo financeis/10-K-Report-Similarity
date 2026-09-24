@@ -150,6 +150,24 @@ class EnsembleConfig(_Strict):
         return self
 
 
+class SpanConfig(_Strict):
+    include_lead_in: bool = True
+    """목록 도입문("Our competitors include:")이나 대명사가 가리키는 앞 문장을 근거 구간에 넣는다."""
+    max_chars: int = 1500
+    """근거 구간 하나의 최대 글자 수. 넘으면 언급 주변만 자른다."""
+
+
+class RelationsConfig(_Strict):
+    """기업 관계도 (docs/relation-map-plan.md)."""
+
+    aliases: Path = Path("configs/aliases.yaml")
+    """회사명 별칭·외부 기업·문맥 제외 규칙."""
+    similarity: str | None = None
+    """1차 후보에 쓸 유사도 (방법·변형·앙상블 이름). 비우면 이름 언급만 후보로 쓴다."""
+    top_k: int = 20
+    spans: SpanConfig = Field(default_factory=SpanConfig)
+
+
 class Config(_Strict):
     name: str
     data_dir: Path = Path("data")
@@ -164,6 +182,7 @@ class Config(_Strict):
     """neighbors 결과에 저장할 이웃 수."""
     ensembles: list[EnsembleConfig] = Field(default_factory=list)
     evaluation: EvaluationConfig = Field(default_factory=EvaluationConfig)
+    relations: RelationsConfig | None = None
 
     @model_validator(mode="after")
     def _check_methods(self) -> Config:
@@ -186,6 +205,9 @@ class Config(_Strict):
         known = variants | {e.name for e in self.ensembles}
         if self.evaluation.baseline and self.evaluation.baseline not in known:
             raise ValueError(f"evaluation.baseline {self.evaluation.baseline!r}이 없는 이름입니다")
+        rel = self.relations
+        if rel and rel.similarity and rel.similarity not in known:
+            raise ValueError(f"relations.similarity {rel.similarity!r}이 없는 이름입니다")
         return self
 
     @property
@@ -221,6 +243,10 @@ class Config(_Strict):
     @property
     def report_path(self) -> Path:
         return self.reports_dir / f"{self.name}.md"
+
+    @property
+    def relations_dir(self) -> Path:
+        return self.run_dir / "relations"
 
     def method_dir(self, name: str) -> Path:
         return self.run_dir / "methods" / name

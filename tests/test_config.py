@@ -4,14 +4,25 @@ import pytest
 from pydantic import ValidationError
 
 from tenksim.config import Config, load_config
+from tenksim.relations.names import load_aliases
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-@pytest.mark.parametrize("path", sorted((ROOT / "configs").glob("*.yaml")), ids=lambda p: p.name)
+EXPERIMENTS = [p for p in sorted((ROOT / "configs").glob("*.yaml")) if p.name != "aliases.yaml"]
+
+
+@pytest.mark.parametrize("path", EXPERIMENTS, ids=lambda p: p.name)
 def test_repo_configs_are_valid(path):
     cfg = load_config(path)
     assert cfg.methods and cfg.filings.year
+    if cfg.relations:
+        load_aliases(ROOT / cfg.relations.aliases)
+
+
+def test_relations_similarity_must_exist():
+    with pytest.raises(ValidationError, match="relations.similarity"):
+        Config.model_validate(minimal(relations={"similarity": "nope"}))
 
 
 def minimal(**overrides) -> dict:

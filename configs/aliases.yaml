@@ -1,0 +1,180 @@
+# 10-K 본문에서 회사 이름을 찾을 때 쓰는 사전 (tenksim mentions).
+#
+# 기본 이름은 기업 목록의 회사명에서 Inc. 같은 접미사를 떼어 자동으로 만듭니다.
+# 이 파일은 자동으로 못 만드는 이름을 보탭니다. 사람이 직접 고치는 파일입니다.
+#
+# - names:    정식 이름, 흔히 쓰는 줄임말. 대소문자를 구분합니다.
+# - products: 제품·자회사 이름. 인수·분사로 소속이 바뀌므로 적용 기간(since/until,
+#             회계연도)을 적을 수 있습니다. 비우면 기간 제한이 없습니다.
+# - 자동 이름이 일반 단어(아래 generic_words)라서 빠진 회사는 names에 정식 명칭을 적어 주세요.
+#   예: Target → "Target Corporation"
+
+# 티커 ON처럼 YAML이 참·거짓으로 읽는 키는 따옴표로 감쌉니다.
+companies:
+  AAPL: {names: [Apple]}
+  AMZN:
+    names: [Amazon, Amazon.com]
+    products: [{name: Amazon Web Services}, {name: AWS}]
+  MSFT:
+    names: [Microsoft]
+    products: [{name: Microsoft Azure}, {name: LinkedIn, since: 2016}, {name: GitHub, since: 2018}, {name: Activision Blizzard, since: 2024}]
+  GOOGL:
+    names: [Google, Alphabet]
+    products: [{name: YouTube}, {name: Google Cloud}, {name: Android}]
+  META:
+    names: [Meta Platforms, Facebook]
+    products: [{name: Instagram}, {name: WhatsApp}]
+  NVDA: {names: [NVIDIA, Nvidia]}
+  AMD: {names: [AMD, Advanced Micro Devices]}
+  INTC: {names: [Intel]}
+  AVGO: {names: [Broadcom]}
+  QCOM: {names: [Qualcomm, QUALCOMM]}
+  TXN: {names: [Texas Instruments]}
+  MU: {names: [Micron]}
+  AMAT: {names: [Applied Materials]}
+  LRCX: {names: [Lam Research]}
+  KLAC: {names: [KLA]}
+  SWKS: {names: [Skyworks]}
+  "ON": {names: [onsemi, ON Semiconductor]}
+  ADI: {names: [Analog Devices]}
+  NXPI: {names: [NXP]}
+  MCHP: {names: [Microchip]}
+  TEL: {names: [TE Connectivity]}
+  ANET: {names: [Arista, Arista Networks]}
+  CSCO: {names: [Cisco]}
+  IBM: {names: [IBM]}
+  HPE: {names: [HPE, Hewlett Packard Enterprise]}
+  HPQ: {names: [HP Inc]}
+  DELL: {names: [Dell, Dell Technologies]}
+  SMCI: {names: [Supermicro, Super Micro, Super Micro Computer]}
+  CRM: {names: [Salesforce]}
+  NOW: {names: [ServiceNow]}
+  ORCL: {names: [Oracle]}
+  T: {names: [AT&T]}
+  TMUS: {names: [T-Mobile]}
+  VZ: {names: [Verizon]}
+  WMT: {names: [Walmart, Wal-Mart]}
+  TGT: {names: [Target Corporation]}
+  HD: {names: [Home Depot, The Home Depot]}
+  LOW: {names: ["Lowe's", "Lowe’s"]}
+  COST: {names: [Costco]}
+  KO: {names: [Coca-Cola, The Coca-Cola Company]}
+  PEP: {names: [PepsiCo]}
+  PG: {names: [Procter & Gamble, P&G]}
+  JNJ: {names: [Johnson & Johnson]}
+  LLY: {names: [Eli Lilly, Lilly]}
+  MRK: {names: [Merck]}
+  BMY: {names: [Bristol Myers Squibb, Bristol-Myers Squibb]}
+  UPS: {names: [United Parcel Service, UPS]}
+  FDX: {names: [FedEx]}
+  BA: {names: [Boeing]}
+  GE: {names: [GE Aerospace, General Electric]}
+  GM: {names: [General Motors]}
+  F: {names: [Ford Motor, Ford]}
+  TSLA: {names: [Tesla]}
+  MA: {names: [Mastercard, MasterCard]}
+  V: {names: [Visa]}
+  AXP: {names: [American Express]}
+  PYPL: {names: [PayPal]}
+  JPM: {names: [JPMorgan, JPMorgan Chase, J.P. Morgan]}
+  BAC: {names: [Bank of America]}
+  C: {names: [Citigroup, Citibank]}
+  WFC: {names: [Wells Fargo]}
+  GS: {names: [Goldman Sachs]}
+  MS: {names: [Morgan Stanley]}
+  STT: {names: [State Street]}
+  BRK.B: {names: [Berkshire Hathaway]}
+  UNH: {names: [UnitedHealth, UnitedHealthcare]}
+  COR: {names: [Cencora, AmerisourceBergen]}
+  XOM: {names: [ExxonMobil, Exxon Mobil, Exxon]}
+  CVX: {names: [Chevron]}
+  DIS: {names: [Disney, The Walt Disney Company]}
+  MCD: {names: ["McDonald's", "McDonald’s"]}
+  NKE: {names: [Nike, NIKE]}
+  RTX: {names: [RTX Corporation, Raytheon]}   # 'RTX'만으로는 NVIDIA RTX(제품)와 겹침
+  DE: {names: [Deere, John Deere]}
+  MMM: {names: [3M]}
+  LMT: {names: [Lockheed Martin]}
+  NOC: {names: [Northrop Grumman]}
+  GD: {names: [General Dynamics]}
+  UNP: {names: [Union Pacific]}
+  DAL: {names: [Delta Air Lines]}
+  UAL: {names: [United Airlines]}
+  LUV: {names: [Southwest Airlines]}
+  SPG: {names: [Simon Property]}
+  WMB: {names: [Williams Companies]}
+  MPC: {names: [Marathon Petroleum]}
+  SO: {names: [Southern Company, The Southern Company]}
+  CEG: {names: [Constellation Energy]}
+  STZ: {names: [Constellation Brands]}
+  HON: {names: [Honeywell]}
+  SPGI: {names: [S&P Global, Standard & Poor's, "Standard & Poor’s"]}
+  MCO: {names: [Moody's, "Moody’s"]}
+  NDAQ: {names: [Nasdaq, NASDAQ]}
+  ICE: {names: [Intercontinental Exchange]}
+  CME: {names: [CME Group, Chicago Mercantile Exchange]}
+  CBOE: {names: [Cboe, CBOE]}
+  MSCI: {names: [MSCI]}
+
+  # 기업 목록은 '현재' S&P 500이라 나중에 분사한 회사도 들어 있습니다. 분사 전 모회사 10-K에서
+  # 이 이름은 모회사의 사업부를 가리키므로, 독립 회사가 된 회계연도(since)부터만 씁니다.
+  GEV: {since: 2024}    # GE Vernova, 2024-04 GE에서 분사
+  SOLV: {since: 2024}   # Solventum, 2024-04 3M에서 분사
+  SW: {since: 2024}     # Smurfit Westrock, 2024-07 합병 출범
+  SNDK: {since: 2025}   # Sandisk, 2025-02 Western Digital에서 분사
+  Q: {since: 2025}      # Qnity Electronics, DuPont 전자 사업 분사
+  HONA: {since: 2026}   # Honeywell Aerospace, Honeywell에서 분사
+  FDXF: {since: 2026}   # FedEx Freight, FedEx에서 분사
+
+# 분석 대상 밖 회사 (시범). 3단계에서 SEC 전체 등록사 이름으로 넓힙니다.
+# id: 20-F 등 SEC에 공시하는 회사는 cik:<번호>, 아니면 ext:<이름>
+external:
+  - {id: "cik:1046179", name: Taiwan Semiconductor Manufacturing, names: [Taiwan Semiconductor Manufacturing, TSMC]}
+  - {id: "ext:samsung-electronics", name: Samsung Electronics, names: [Samsung Electronics, Samsung]}
+  - {id: "ext:sk-hynix", name: SK hynix, names: [SK hynix, SK Hynix]}
+  - {id: "ext:hon-hai", name: Hon Hai Precision (Foxconn), names: [Hon Hai, Foxconn]}
+  - {id: "cik:937966", name: ASML Holding, names: [ASML]}
+  - {id: "ext:huawei", name: Huawei, names: [Huawei]}
+  - {id: "cik:1577552", name: Alibaba Group, names: [Alibaba]}
+  - {id: "cik:313838", name: Sony Group, names: [Sony]}
+  - {id: "cik:1094517", name: Toyota Motor, names: [Toyota]}
+  - {id: "ext:arm-holdings", name: Arm Holdings, names: [Arm Holdings, Arm Limited]}
+  - {id: "ext:xiaomi", name: Xiaomi, names: [Xiaomi]}
+  - {id: "ext:mediatek", name: MediaTek, names: [MediaTek]}
+
+# 이 단어만으로는 회사라고 보기 어려워 자동 이름에서 뺍니다.
+# 이런 회사는 위 companies에 정식 명칭을 적어야 잡힙니다.
+generic_words: [
+  American, General, United, Texas, Southern, Public, Global, First, Digital, International,
+  National, Target, Ball, Block, Carrier, Delta, Waters, Pool, Progressive, Mosaic, Match, Fox,
+  News, Equity, Extra, Host, Iron, Live, Marathon, Simon, Williams, Union, Quest, Royal, State,
+  Steel, Super, West, Regency, Realty, Principal, Republic, Universal, Consolidated, Edison, Arch,
+  Martin, Stanley, Tractor, Northern, Old, Advanced, Applied, Analog, Genuine, Monster, Hartford,
+  Cooper, Dover, Travelers, Constellation, Honeywell, Amcor, Everest, Expand, Flex, Casey,
+  Masco, Paramount, Ventas, Welltower
+]
+
+# 관계와 상관없는 문맥의 언급은 뺍니다 (이름 단위로 통째 빼지 않고 문장 문맥으로).
+# tickers를 비우면 모든 회사에 적용합니다. pattern은 근거 문장에서 찾는 정규식입니다(대소문자 무시).
+exclude_contexts:
+  - reason: listing
+    tickers: [NDAQ, ICE, CBOE]
+    pattern: '(?:listed|traded|trades|quoted) on (?:the )?(?:Nasdaq|NASDAQ|New York Stock Exchange|NYSE|Cboe)|Nasdaq (?:Global|Stock Market|Capital Market)|under the (?:symbol|ticker)'
+  - reason: index
+    tickers: [SPGI, MSCI, NDAQ]
+    pattern: 'S&P (?:500|400|600|MidCap|SmallCap)|(?:MSCI|Nasdaq(?:-100)?|Russell) [\w\- ]{0,30}Index|index (?:provider|fund)'
+  - reason: credit_rating
+    tickers: [SPGI, MCO]
+    pattern: '\brat(?:ing|ings|ed)\b|downgrad|upgrad|investment[- ]grade|credit outlook'
+  - reason: other_meaning
+    tickers: [UPS]
+    pattern: 'uninterruptible|power suppl|UPS (?:systems?|units?|products?)'
+  - reason: other_company
+    tickers: [MRK]
+    pattern: 'Merck KGaA|EMD Serono'
+  - reason: trademark
+    tickers: []
+    pattern: '(?:is|are) (?:a |the )?(?:registered )?trademarks? (?:of|owned by)|trademarks? of [A-Z]'
+  - reason: performance_graph
+    tickers: []
+    pattern: 'performance graph|peer group|cumulative total (?:shareholder|stockholder) return'
