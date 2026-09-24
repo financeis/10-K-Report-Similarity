@@ -10,6 +10,7 @@ node_id(cik:1045810)와 pair_key(cik:1|cik:2)는 경로에 넣을 때 URL 인코
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
@@ -23,6 +24,14 @@ from ..relations import reviews as reviews_mod
 from ..relations.mentions import text_hash
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+
+class EdgeReviewIn(BaseModel):
+    edge_id: str
+    verdict: str
+    note: str | None = None
+    evidence_hash: str
+    """검수자가 본 근거의 해시 (GET /api/edges가 준 값). 지금 근거와 다르면 409."""
 
 
 class LabelIn(BaseModel):
@@ -66,10 +75,10 @@ def create_app(graph_db: Path, reviews_db: Path | None = None) -> FastAPI:
 
     @app.get("/api/nodes")
     def search_nodes(q: str = "", limit: int = Query(30, le=200)):
-        """티커·이름 검색. 검색어가 없으면 이름 언급 후보가 많은 회사부터."""
+        """티커·이름 검색. 검색어가 없으면 관계(검수 반영)가 많은 회사부터."""
         q = q.strip()
         with db() as con:
-            return rows(
+            found = rows(
                 con,
                 """
                 SELECT n.node_id, n.kind, n.ticker, n.name, n.gics_sector, n.analyzed,
@@ -80,12 +89,19 @@ def create_app(graph_db: Path, reviews_db: Path | None = None) -> FastAPI:
                 WHERE ?1 = '' OR n.ticker LIKE ?2 OR n.name LIKE ?2
                 GROUP BY n.node_id
                 HAVING n_candidates > 0
-                ORDER BY (?1 != '' AND UPPER(n.ticker) = UPPER(?1)) DESC, n.analyzed DESC,
-                         n_mention_candidates DESC, n.name
-                LIMIT ?3
                 """,
-                q, f"%{q}%", limit,
+                q, f"%{q}%",
             )  # fmt: skip
+            counts = relation_counts(con)
+        for n in found:
+            n["n_relations"] = counts.get(n["node_id"], 0)
+        found.sort(
+            key=lambda n: (
+                not (q and (n["ticker"] or "").upper() == q.upper()), -n["analyzed"],
+                -n["n_relations"], -n["n_mention_candidates"], n["name"],
+            )
+        )  # fmt: skip
+        return found[:limit]
 
     @app.get("/api/nodes/{node_id}")
     def get_node(node_id: str):
@@ -124,12 +140,14 @@ def create_app(graph_db: Path, reviews_db: Path | None = None) -> FastAPI:
                 JOIN nodes o ON o.node_id = CASE WHEN c.node_a = ?1 THEN c.node_b ELSE c.node_a END
                 WHERE ?1 IN (c.node_a, c.node_b)
                   AND (?2 IS NULL OR c.source = ?2)
-                  AND (?3 IS NULL OR c.status = ?3)
                 ORDER BY rank_mine IS NULL, rank_mine, (mentions_out + mentions_in) DESC, o.name
                 """,
-                node_id, source, status,
+                node_id, source,
             )  # fmt: skip
-            return out
+            by_pair = edges_by_pair(con, "WHERE ? IN (e.src, e.dst)", node_id)
+            for c in out:
+                c["status"] = _pair_status(by_pair.get(c["pair_key"], []), c["status"])
+            return [c for c in out if status is None or c["status"] == status]
 
     @app.get("/api/candidates/{pair_key}")
     def get_candidate(pair_key: str):
@@ -177,6 +195,10 @@ def create_app(graph_db: Path, reviews_db: Path | None = None) -> FastAPI:
                 "   OR (s.doc_node = ?2 AND f.target_node = ?1)",
                 cand["node_a"], cand["node_b"],
             )  # fmt: skip
+            edges = edges_by_pair(con, "WHERE e.src = ? AND e.dst = ?", cand["node_a"],
+                                  cand["node_b"]).get(pair_key, [])  # fmt: skip
+            cand["edges"] = [{k: e[k] for k in ("edge_id", "relation", "state")} for e in edges]
+            cand["status"] = _pair_status(edges, cand["status"])
             return cand
 
     @app.get("/api/spans/{span_id}/context")
@@ -351,6 +373,181 @@ def create_app(graph_db: Path, reviews_db: Path | None = None) -> FastAPI:
                 raise HTTPException(422, str(exc)) from exc
             return {"label_id": label_id, "label": reviews_mod.latest_label(r, body.unit_id)}
 
+    # ------------------------------------------------------------ 관계 (2단계)
+
+    def overlay_reviews(con, edges: list[dict]) -> list[dict]:
+        """reviews.sqlite의 최신 관계 검수를 덧씌우고 화면용 상태(state)를 붙인다.
+        export를 다시 하지 않아도 검수 결과가 바로 보이게 하려는 것이다."""
+        latest = {}
+        if reviews_db.exists():
+            with rdb() as r:
+                latest = reviews_mod.latest_edge_reviews(r)
+        for e in edges:
+            rv = latest.get(e["edge_id"])
+            if rv is not None:
+                e["review_state"] = reviews_mod.review_state(rv, evidence_hash(con, e["edge_id"]))
+                e["review"] = {k: rv[k] for k in ("verdict", "note", "reviewed_at")}
+            e["state"] = _edge_state(e)
+        return edges
+
+    def evidence_hash(con, edge_id: str) -> str:
+        """관계의 근거 문장(도입문 포함) 해시. export의 apply_edge_reviews와 같은 방식이어야 한다."""
+        return reviews_mod.evidence_hash(
+            [
+                (t["span_id"], reviews_mod.span_full_text(t["text"], t["lead_text"]))
+                for t in rows(
+                    con,
+                    "SELECT v.span_id, s.text, s.lead_text FROM edge_evidence v "
+                    "JOIN spans s USING (span_id) WHERE v.edge_id = ?",
+                    edge_id,
+                )
+            ]
+        )
+
+    def relation_counts(con) -> dict[str, int]:
+        """회사마다 화면에 보이는 관계 수 (모델 채택 + 검수로 확인, 검수로 거절한 것은 빼고)."""
+        counts: dict[str, int] = {}
+        for e in overlay_reviews(
+            con, rows(con, "SELECT edge_id, src, dst, decision, review_state FROM edges")
+        ):
+            if e["state"] in ("accepted", "confirmed"):
+                for n in (e["src"], e["dst"]):
+                    counts[n] = counts.get(n, 0) + 1
+        return counts
+
+    def edges_by_pair(con, where: str, *params) -> dict[str, list[dict]]:
+        out: dict[str, list[dict]] = {}
+        for e in overlay_reviews(
+            con,
+            rows(
+                con,
+                f"SELECT edge_id, src, dst, relation, decision, review_state FROM edges e {where}",
+                *params,
+            ),
+        ):
+            out.setdefault(f"{e['src']}|{e['dst']}", []).append(e)
+        return out
+
+    @app.get("/api/nodes/{node_id}/relations")
+    def node_relations(node_id: str):
+        """이 회사의 관계 전부 (채택·불확실·검수로 거절한 것). 거르기는 화면에서 한다."""
+        with db() as con:
+            one(con, "SELECT node_id FROM nodes WHERE node_id = ?", node_id)
+            edges = rows(
+                con,
+                """
+                SELECT e.*, o.node_id AS other_id, o.kind AS other_kind, o.ticker AS other_ticker,
+                       o.name AS other_name, o.gics_sector AS other_sector
+                FROM edges e
+                JOIN nodes o ON o.node_id = CASE WHEN e.src = ?1 THEN e.dst ELSE e.src END
+                WHERE ?1 IN (e.src, e.dst)
+                ORDER BY e.relation, e.score DESC
+                """,
+                node_id,
+            )  # fmt: skip
+            return overlay_reviews(con, edges)
+
+    @app.get("/api/edges/{edge_id}")
+    def get_edge(edge_id: str):
+        """관계 하나: 두 회사, 근거 문장(점수 높은 순, 두 회사 이름 강조), 매출 비중, 유사도."""
+        with db() as con:
+            edge = one(con, "SELECT * FROM edges WHERE edge_id = ?", edge_id)
+            nodes = {
+                n["node_id"]: n
+                for n in rows(
+                    con,
+                    "SELECT node_id, kind, ticker, name, gics_sector, gics_sub_industry "
+                    "FROM nodes WHERE node_id IN (?, ?)",
+                    edge["src"],
+                    edge["dst"],
+                )  # fmt: skip
+            }
+            edge["a"], edge["b"] = nodes[edge["src"]], nodes[edge["dst"]]
+            pair_key = f"{edge['src']}|{edge['dst']}"
+            cand = con.execute(
+                "SELECT rank_ab, rank_ba, source FROM candidates WHERE pair_key = ?", (pair_key,)
+            ).fetchone()
+            edge["candidate"] = dict(cand) if cand else None
+            evidence = rows(
+                con,
+                """
+                SELECT v.span_id, v.target_node, v.score, v.decision, v.ord,
+                       s.doc_node, s.section, s.char_start, s.char_end, s.text, s.lead_text,
+                       f.filing_date, f.filing_url, u.s_is_entity, u.status AS unit_status
+                FROM edge_evidence v
+                JOIN spans s USING (span_id)
+                LEFT JOIN filings f ON f.accession = s.accession
+                LEFT JOIN unit_judgements u ON u.unit_id = v.span_id || '|' || v.target_node
+                WHERE v.edge_id = ?
+                ORDER BY v.ord
+                """,
+                edge_id,
+            )  # fmt: skip
+            for ev in evidence:
+                ev["highlights"] = [
+                    h for h in _highlights(con, ev, edge["src"], edge["dst"]) if not h["excluded"]
+                ]
+            edge["evidence"] = evidence
+            edge["evidence_hash"] = evidence_hash(con, edge_id)
+            edge["thresholds"] = judge_thresholds(con)
+            # 매출 비중은 거래 관계의 수치라 공급·협력에서만 보여준다 (경쟁 관계 밑에 두면 오해한다)
+            edge["figures"] = [] if edge["relation"] != "business" else rows(
+                con,
+                "SELECT f.*, s.doc_node FROM figures f JOIN spans s USING (span_id) "
+                "WHERE (s.doc_node = ?1 AND f.target_node = ?2) "
+                "   OR (s.doc_node = ?2 AND f.target_node = ?1)",
+                edge["src"], edge["dst"],
+            )  # fmt: skip
+            return overlay_reviews(con, [edge])[0]
+
+    def judge_thresholds(con) -> dict:
+        """graph.db를 만들 때 쓴 질문별 (채택, 기각) 임계값. 불확실한 이유를 설명하는 데 쓴다."""
+        r = con.execute("SELECT value FROM meta WHERE key = 'judge'").fetchone()
+        try:
+            return json.loads(r[0]).get("thresholds", {}) if r else {}
+        except ValueError:
+            return {}
+
+    @app.get("/api/review/edges")
+    def review_edges(include_done: bool = False):
+        """관계 검수 대기열: 모델이 불확실로 남긴 관계와, 검수 뒤 근거가 바뀐 관계.
+        include_done이면 이미 검수한 불확실 관계도 함께 (검수 순서를 유지하려고)."""
+        with db() as con:
+            edges = rows(
+                con,
+                """
+                SELECT e.*, a.name AS a_name, a.ticker AS a_ticker, a.gics_sector AS a_sector,
+                       a.kind AS a_kind, b.name AS b_name, b.ticker AS b_ticker,
+                       b.gics_sector AS b_sector, b.kind AS b_kind
+                FROM edges e JOIN nodes a ON a.node_id = e.src JOIN nodes b ON b.node_id = e.dst
+                WHERE e.decision = 'uncertain' OR e.review_state = 'needs_recheck'
+                ORDER BY CASE e.relation WHEN 'competitor' THEN 0 WHEN 'business' THEN 1 ELSE 2 END,
+                         e.score DESC
+                """,
+            )  # fmt: skip
+            edges = overlay_reviews(con, edges)
+            if not include_done:
+                edges = [e for e in edges if e.get("review_state") in (None, "needs_recheck")]
+            return edges
+
+    @app.post("/api/review/edges")
+    def save_edge_review(body: EdgeReviewIn):
+        with rdb() as r, db() as g:
+            edge = one(g, "SELECT * FROM edges WHERE edge_id = ?", body.edge_id)
+            current = evidence_hash(g, body.edge_id)
+            if body.evidence_hash != current:
+                raise HTTPException(
+                    409,
+                    "그 사이 graph.db가 바뀌어 근거 문장이 달라졌습니다. 다시 불러와 확인해 주세요",
+                )
+            try:
+                review_id = reviews_mod.record_edge_review(
+                    r, edge=edge, evidence_hash=current, verdict=body.verdict, note=body.note
+                )
+            except reviews_mod.LabelError as exc:
+                raise HTTPException(422, str(exc)) from exc
+            return {"review_id": review_id, "edge": overlay_reviews(g, [edge])[0]}
+
     if STATIC_DIR.exists():
         app.mount("/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="assets")
 
@@ -359,6 +556,28 @@ def create_app(graph_db: Path, reviews_db: Path | None = None) -> FastAPI:
             return FileResponse(STATIC_DIR / "index.html")
 
     return app
+
+
+def _edge_state(e: dict) -> str:
+    """화면에 쓰는 최종 상태. 사람의 검수가 모델 판정보다 우선한다.
+    confirmed(사람이 맞다고 함) / accepted(모델 채택) / uncertain(검수 대기) / rejected(사람이 아니라고 함)."""
+    if e.get("review_state") == "rejected":
+        return "rejected"
+    if e.get("review_state") == "accepted":
+        return "confirmed"
+    return "accepted" if e["decision"] == "accepted" else "uncertain"
+
+
+def _pair_status(edges: list[dict], fallback: str) -> str:
+    """후보 쌍의 판정 결과를 관계 상태(검수 반영)로 정한다. 관계가 없으면 graph.db의 값."""
+    states = {e["state"] for e in edges}
+    if states & {"accepted", "confirmed"}:
+        return "accepted"
+    if "uncertain" in states:
+        return "uncertain"
+    if edges:
+        return "rejected_by_review"  # 관계는 있었지만 사람이 모두 거절
+    return fallback
 
 
 def _highlights(con, span: dict, a: str, b: str) -> list[dict]:

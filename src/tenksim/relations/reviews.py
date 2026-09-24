@@ -92,6 +92,22 @@ CREATE TABLE IF NOT EXISTS span_labels (
     schema_version INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS span_labels_unit ON span_labels(unit_id, label_id);
+CREATE TABLE IF NOT EXISTS edge_reviews (   -- 관계 검수 (운영 검수, 모델 판정을 보여준 채)
+    review_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    edge_id TEXT NOT NULL,             -- <relation>|<pair_key>
+    pair_key TEXT NOT NULL,
+    relation TEXT NOT NULL,
+    verdict TEXT NOT NULL,             -- accept / reject
+    evidence_hash TEXT NOT NULL,       -- 검수 당시 근거 문장들의 해시. 바뀌면 다시 검수
+    model_decision TEXT,               -- 검수 당시 모델 결정 (accepted / uncertain)
+    model_score REAL,
+    model_id TEXT,
+    question_version TEXT,
+    note TEXT,
+    reviewed_at TEXT NOT NULL,
+    schema_version INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS edge_reviews_edge ON edge_reviews(edge_id, review_id);
 CREATE TABLE IF NOT EXISTS sample_settings (
     sample_id TEXT PRIMARY KEY REFERENCES samples(sample_id),
     settings TEXT NOT NULL,            -- 확인 표본을 뽑을 때 고정한 판정 설정 (JSON)
@@ -375,3 +391,64 @@ def sample_progress(reviews: sqlite3.Connection) -> list[dict]:
             """
         )
     ]
+
+
+# ---------------------------------------------------------------- 관계 검수 (운영 검수)
+
+EDGE_VERDICTS = ("accept", "reject")
+
+
+def evidence_hash(spans: list[tuple[str, str]]) -> str:
+    """근거 문장 (span_id, 도입문 포함 원문) 목록의 해시. 순서와 상관없이 같은 근거면 같은 값."""
+    return text_hash("\n".join(f"{sid}\t{text}" for sid, text in sorted(spans)))
+
+
+def record_edge_review(
+    reviews: sqlite3.Connection,
+    *,
+    edge: dict,
+    evidence_hash: str,
+    verdict: str,
+    note: str | None = None,
+) -> int:
+    """edge: graph.db edges의 한 줄. evidence_hash: 검수자가 본 근거 문장들의 해시.
+    사람의 결정이 모델 판정보다 우선한다 (7.5)."""
+    if verdict not in EDGE_VERDICTS:
+        raise LabelError(f"verdict는 {EDGE_VERDICTS} 중 하나여야 합니다")
+    with reviews:
+        cur = reviews.execute(
+            """
+            INSERT INTO edge_reviews (edge_id, pair_key, relation, verdict, evidence_hash,
+                model_decision, model_score, model_id, question_version, note, reviewed_at,
+                schema_version)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (edge["edge_id"], f"{edge['src']}|{edge['dst']}", edge["relation"], verdict,
+             evidence_hash, edge.get("decision"), edge.get("score"),
+             edge.get("model_id"), edge.get("question_version"), note or None, _now(),
+             REVIEWS_SCHEMA_VERSION),
+        )  # fmt: skip
+    return int(cur.lastrowid)
+
+
+def latest_edge_reviews(reviews: sqlite3.Connection) -> dict[str, dict]:
+    """관계마다 가장 최근 검수."""
+    return {
+        r["edge_id"]: dict(r)
+        for r in reviews.execute(
+            """
+            SELECT r.* FROM edge_reviews r
+            JOIN (SELECT edge_id, MAX(review_id) AS review_id FROM edge_reviews GROUP BY edge_id)
+              USING (edge_id, review_id)
+            """
+        )
+    }
+
+
+def review_state(review: dict | None, current_hash: str) -> str | None:
+    """검수 기록 → 관계의 검수 상태. 근거가 바뀌었으면 자동으로 적용하지 않고 다시 검수한다."""
+    if review is None:
+        return None
+    if review["evidence_hash"] != current_hash:
+        return "needs_recheck"
+    return "accepted" if review["verdict"] == "accept" else "rejected"

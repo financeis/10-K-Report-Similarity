@@ -1,18 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
-import {
-  api,
-  type CandidateRow,
-  type EvidenceSpan,
-  type Figure,
-  type NodeDetail,
-  type NodeSummary,
-} from "./api";
+import { api, type CandidateRow, type EvidenceSpan, type NodeDetail, type NodeSummary } from "./api";
 import { ErrorBox, NodeName } from "./Common";
 import { ContextModal } from "./ContextModal";
-import { Highlighted, type Range } from "./Highlighted";
-import { href, reviewHref, useFetch, useRoute } from "./hooks";
+import { EdgeQueue } from "./EdgeQueue";
+import { candidatesHref, href, queueHref, reviewHref, useFetch, useRoute, type NodeTab } from "./hooks";
+import { Figures, NodeHeader, SpanText } from "./NodeParts";
+import { RelationsView } from "./Relations";
 import { ReviewPage } from "./Review";
-import { CUE, KIND, OPERATOR, SECTION, SOURCE, excludedLabel, sectorColor } from "./labels";
+import { CANDIDATE_STATUS, CUE, RELATION, SECTION, SOURCE, excludedLabel } from "./labels";
 
 export function App() {
   const route = useRoute();
@@ -25,12 +20,14 @@ export function App() {
         </a>
         <SearchBox />
         <nav className="nav">
-          <a href="#/" className={!route.review ? "on" : ""}>후보 보기</a>
+          <a href="#/" className={!route.review && !route.queue ? "on" : ""}>관계도</a>
+          <a href={queueHref()} className={route.queue ? "on" : ""}>관계 검수</a>
           <a href={reviewHref()} className={route.review ? "on" : ""}>표본 검수</a>
         </nav>
         {meta.data && (
           <span className="topbar-meta">
-            {meta.data.filings_year}년 10-K · 후보 기준 {meta.data.similarity} 상위 {meta.data.top_k}
+            {meta.data.filings_year}년 10-K · 판정 {judgeModel(meta.data)} · 후보 {meta.data.similarity} 상위{" "}
+            {meta.data.top_k}
           </span>
         )}
       </header>
@@ -40,8 +37,10 @@ export function App() {
         </main>
       ) : route.review ? (
         <ReviewPage sample={route.sample} ord={route.ord} />
+      ) : route.queue ? (
+        <EdgeQueue edgeId={route.edge} />
       ) : route.node ? (
-        <NodePage nodeId={route.node} pairKey={route.pair} />
+        <NodePage nodeId={route.node} tab={route.tab} pairKey={route.pair} edgeId={route.edge} />
       ) : (
         <Home />
       )}
@@ -98,25 +97,34 @@ function SearchBox() {
   );
 }
 
+function judgeModel(meta: Record<string, string>): string {
+  try {
+    return JSON.parse(meta.judge ?? "{}").model ?? "없음";
+  } catch {
+    return "없음";
+  }
+}
+
 function Home() {
   const list = useFetch("home", () => api.search(""));
   return (
     <main className="page">
       <section className="intro">
-        <h1>10-K에서 찾은 기업 관계 후보</h1>
+        <h1>10-K에서 확인한 기업 관계</h1>
         <p>
-          회사를 고르면 판정 전 후보 쌍(유사도 상위 기업 ∪ 10-K에 이름이 나온 기업)과 그 근거 문장을
-          볼 수 있습니다. 아직 모델 판정 전이라, 관계의 종류는 표시하지 않습니다.
+          S&amp;P 500 회사의 10-K(Item 1·1A)에 적힌 문장에서 두 회사의 관계를 찾았습니다. 관계는 경쟁, 공급·협력,
+          지분 세 가지이고 방향은 따지지 않습니다. 회사를 고르면 관계도와 근거 문장이 나옵니다. 지분 관계는 아직
+          검증 전입니다.
         </p>
       </section>
-      <h2 className="section-title">이름 언급 후보가 많은 회사</h2>
+      <h2 className="section-title">관계가 많은 회사</h2>
       {list.error && <ErrorBox message={list.error} />}
       <div className="card-grid">
         {list.data?.map((n) => (
           <a key={n.node_id} className="company-card" href={href(n.node_id)}>
             <NodeName name={n.name} ticker={n.ticker} sector={n.gics_sector} kind={n.kind} />
             <span className="muted small">
-              후보 {n.n_candidates} · 언급 {n.n_mention_candidates}
+              관계 {n.n_relations} · 후보 {n.n_candidates}
             </span>
           </a>
         ))}
@@ -136,42 +144,90 @@ const FILTERS: [Filter, string][] = [
   ["cross", "섹터가 다른 회사"],
 ];
 
-function NodePage({ nodeId, pairKey }: { nodeId: string; pairKey: string | null }) {
+function NodeTabs({ nodeId, tab }: { nodeId: string; tab: NodeTab }) {
+  return (
+    <div className="tabs" role="tablist">
+      <a role="tab" aria-selected={tab === "relations"} className={tab === "relations" ? "on" : ""} href={href(nodeId)}>
+        관계
+      </a>
+      <a
+        role="tab"
+        aria-selected={tab === "candidates"}
+        className={tab === "candidates" ? "on" : ""}
+        href={candidatesHref(nodeId)}
+      >
+        후보 전체
+      </a>
+    </div>
+  );
+}
+
+function NodePage({
+  nodeId,
+  tab,
+  pairKey,
+  edgeId,
+}: {
+  nodeId: string;
+  tab: NodeTab;
+  pairKey: string | null;
+  edgeId: string | null;
+}) {
   const node = useFetch(`node:${nodeId}`, () => api.node(nodeId));
+  if (node.error) return <main className="page"><ErrorBox message={node.error} /></main>;
+  if (!node.data || node.data.node_id !== nodeId) return <main className="page"><p className="muted">불러오는 중…</p></main>;
+  const header = (
+    <>
+      <NodeHeader node={node.data} />
+      <NodeTabs nodeId={nodeId} tab={tab} />
+    </>
+  );
+  return (
+    <main className="split">
+      {tab === "relations" ? (
+        <RelationsView key={nodeId} node={node.data} edgeId={edgeId} header={header} />
+      ) : (
+        <CandidatesView key={nodeId} node={node.data} pairKey={pairKey} header={header} />
+      )}
+    </main>
+  );
+}
+
+function CandidatesView({ node, pairKey, header }: { node: NodeDetail; pairKey: string | null; header: React.ReactNode }) {
+  const nodeId = node.node_id;
   const cands = useFetch(`cands:${nodeId}`, () => api.candidates(nodeId));
   const [filter, setFilter] = useState<Filter>("all");
 
   const rows = useMemo(() => {
     const all = cands.data ?? [];
-    const sector = node.data?.gics_sector;
+    const sector = node.gics_sector;
     return all.filter((c) => {
       if (filter === "mention") return c.source !== "similarity";
       if (filter === "similarity") return c.source === "similarity";
-      if (filter === "cross") return !!sector && c.other_sector !== sector;
+      if (filter === "cross") return !!sector && !!c.other_sector && c.other_sector !== sector;
       return true;
     });
-  }, [cands.data, filter, node.data]);
+  }, [cands.data, filter, node.gics_sector]);
 
   const counts = useMemo(() => {
     const all = cands.data ?? [];
-    const sector = node.data?.gics_sector;
+    const sector = node.gics_sector;
     return {
       all: all.length,
       mention: all.filter((c) => c.source !== "similarity").length,
       similarity: all.filter((c) => c.source === "similarity").length,
-      cross: all.filter((c) => !!sector && c.other_sector !== sector).length,
+      cross: all.filter((c) => !!sector && !!c.other_sector && c.other_sector !== sector).length,
     };
-  }, [cands.data, node.data]);
+  }, [cands.data, node.gics_sector]);
 
   // 쌍을 고르지 않았으면 첫 언급 후보를 보여준다 (주소는 바꾸지 않음)
   const shownPair =
     pairKey ?? cands.data?.find((c) => c.source !== "similarity")?.pair_key ?? cands.data?.[0]?.pair_key ?? null;
 
-  if (node.error) return <main className="page"><ErrorBox message={node.error} /></main>;
   return (
-    <main className="split">
+    <>
       <section className="left">
-        {node.data && <NodeHeader node={node.data} />}
+        {header}
         <div className="chips" role="tablist">
           {FILTERS.map(([key, label]) => (
             <button
@@ -195,41 +251,7 @@ function NodePage({ nodeId, pairKey }: { nodeId: string; pairKey: string | null 
           !cands.loading && <p className="muted pad">후보가 없습니다.</p>
         )}
       </section>
-    </main>
-  );
-}
-
-function NodeHeader({ node }: { node: NodeDetail }) {
-  return (
-    <div className="node-header">
-      <h1>
-        <span className="dot big" style={{ background: sectorColor(node.gics_sector) }} />
-        {node.name}
-        {node.ticker && <span className="ticker">{node.ticker}</span>}
-        {KIND[node.kind] && <span className="tag">{KIND[node.kind]}</span>}
-      </h1>
-      <p className="muted">
-        {node.gics_sector ? `${node.gics_sector} · ${node.gics_sub_industry}` : "GICS 분류 없음"}
-        {node.parent && (
-          <>
-            {" · 공시한 회사 "}
-            <a href={href(node.parent.node_id)}>{node.parent.name}</a>
-          </>
-        )}
-      </p>
-      {node.filings.map((f) => (
-        <p key={f.accession} className="small muted">
-          <a href={f.filing_url} target="_blank" rel="noreferrer">
-            {f.form} (제출 {f.filing_date}, 회계기간 {f.period_of_report}) ↗
-          </a>
-          {" · 분석한 항목: "}
-          {(f.sections ?? "").split(",").map((s) => SECTION[s] ?? s).join(", ")}
-        </p>
-      ))}
-      {!node.analyzed && node.kind === "company" && (
-        <p className="small warn">이 회사의 10-K는 추출 품질 검사를 통과하지 못해, 다른 회사 10-K의 언급만 보입니다.</p>
-      )}
-    </div>
+    </>
   );
 }
 
@@ -252,6 +274,7 @@ function CandidateTable({
             <th title="이 회사 기준 상대의 유사도 순위 / 상대 기준 이 회사의 순위">유사도 순위</th>
             <th title="이 회사 10-K가 상대를 언급한 횟수 / 상대 10-K가 이 회사를 언급한 횟수">언급 나→ / →나</th>
             <th title="판정에 넣을 근거 문장 수">근거</th>
+            <th>판정 결과</th>
           </tr>
         </thead>
         <tbody>
@@ -259,7 +282,7 @@ function CandidateTable({
             <tr
               key={c.pair_key}
               className={c.pair_key === selected ? "sel" : ""}
-              onClick={() => (window.location.hash = href(nodeId, c.pair_key))}
+              onClick={() => (window.location.hash = candidatesHref(nodeId, c.pair_key))}
             >
               <td>
                 <NodeName name={c.other_name} ticker={c.other_ticker} sector={c.other_sector} kind={c.other_kind} />
@@ -274,6 +297,9 @@ function CandidateTable({
                 {c.mentions_out} <span className="muted">/ {c.mentions_in}</span>
               </td>
               <td className="num">{c.n_spans || <span className="muted">0</span>}</td>
+              <td>
+                <span className={`status st-${c.status}`}>{CANDIDATE_STATUS[c.status] ?? c.status}</span>
+              </td>
             </tr>
           ))}
         </tbody>
@@ -296,6 +322,7 @@ function PairPanel({ pairKey, viewer }: { pairKey: string; viewer: string }) {
   const rankMe = d.a.node_id === viewer ? d.rank_ab : d.rank_ba;
   const rankOther = d.a.node_id === viewer ? d.rank_ba : d.rank_ab;
   const names = { [d.a.node_id]: d.a.name, [d.b.node_id]: d.b.name };
+  const docOf = Object.fromEntries(d.spans.map((s) => [s.span_id, s.doc_node]));
   const live = d.spans.filter((s) => !s.excluded);
   const excluded = d.spans.filter((s) => s.excluded);
 
@@ -332,12 +359,29 @@ function PairPanel({ pairKey, viewer }: { pairKey: string; viewer: string }) {
           </div>
         )}
         <div>
-          <dt>상태</dt>
-          <dd>판정 전</dd>
+          <dt>판정 결과</dt>
+          <dd>
+            {CANDIDATE_STATUS[d.status] ?? d.status}
+            {d.edges
+              .filter((e) => e.state !== "rejected")
+              .map((e) => (
+                <span key={e.edge_id}>
+                  {" · "}
+                  <a className="small" href={href(viewer, e.edge_id)}>
+                    {RELATION[e.relation]} 관계 보기 →
+                  </a>
+                </span>
+              ))}
+          </dd>
         </div>
       </dl>
 
-      {d.figures.length > 0 && <Figures figures={d.figures} spans={d.spans} names={names} />}
+      <Figures
+        figures={d.figures}
+        docOf={(f) => docOf[f.span_id]}
+        names={names}
+        note="문장에서 코드로 뽑은 후보입니다. 원문으로 확인하세요."
+      />
 
       {live.length === 0 ? (
         <p className="note">
@@ -375,7 +419,6 @@ function PairPanel({ pairKey, viewer }: { pairKey: string; viewer: string }) {
 }
 
 function SpanCard({ span, onContext }: { span: EvidenceSpan; onContext: () => void }) {
-  const ranges: Range[] = span.highlights.map((h) => ({ start: h.start, end: h.end, className: "name" }));
   return (
     <article className={span.excluded ? "span-card is-excluded" : "span-card"}>
       <div className="span-meta">
@@ -396,60 +439,7 @@ function SpanCard({ span, onContext }: { span: EvidenceSpan; onContext: () => vo
           본문에서 보기
         </button>
       </div>
-      {span.lead_text && <p className="lead">{span.lead_text} …</p>}
-      <p className="span-text">
-        <Highlighted text={span.text} ranges={ranges} />
-      </p>
+      <SpanText text={span.text} lead={span.lead_text} highlights={span.highlights} />
     </article>
-  );
-}
-
-function Figures({
-  figures,
-  spans,
-  names,
-}: {
-  figures: Figure[];
-  spans: EvidenceSpan[];
-  names: Record<string, string>;
-}) {
-  const docOf = Object.fromEntries(spans.map((s) => [s.span_id, s.doc_node]));
-  // 같은 문장이 Item 1과 1A에 반복되면 같은 수치가 두 번 나온다
-  const seen = new Set<string>();
-  const unique = figures.filter((f) => {
-    const key = `${docOf[f.span_id]}|${f.target_node}|${f.value}|${f.operator}|${f.period}|${f.raw}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-  return (
-    <section className="figures">
-      <h3>매출 비중 후보</h3>
-      <ul>
-        {unique.map((f) => (
-          <li key={f.figure_id}>
-            {f.value != null ? (
-              <>
-                <b>{names[docOf[f.span_id]]}</b> 매출에서 <b>{names[f.target_node]}</b>{" "}
-                {f.subject === "each" ? "(각각) " : ""}
-                <b>
-                  {OPERATOR[f.operator ?? "="]}
-                  {f.value}%
-                </b>
-                <span className="muted">
-                  {" "}
-                  ({[f.period, f.denominator].filter(Boolean).join(", ")})
-                </span>
-              </>
-            ) : (
-              <>
-                <span className="muted">귀속이 불분명해 수치를 비움:</span> “{f.raw}”
-              </>
-            )}
-          </li>
-        ))}
-      </ul>
-      <p className="small muted">문장에서 코드로 뽑은 후보입니다. 판정 전이므로 원문으로 확인하세요.</p>
-    </section>
   );
 }

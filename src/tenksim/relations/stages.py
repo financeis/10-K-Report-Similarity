@@ -223,7 +223,7 @@ def _unit_requests(cfg: Config, con: sqlite3.Connection, units: pd.DataFrame):
 def relations_from_cache(cfg: Config, con: sqlite3.Connection):
     """graph.db(쓰는 중)의 모든 단위에 대해 캐시에 있는 판정만 꺼내 관계를 만든다. 모델은 부르지 않는다."""
     from .judge.cache import connect, judge_cached
-    from .merge import build_relations
+    from .merge import build_relations, candidate_status
 
     rel = relations_config(cfg)
     units = all_units(con)
@@ -233,9 +233,16 @@ def relations_from_cache(cfg: Config, con: sqlite3.Connection):
     )
     judgements = {j.unit_id: j for j in run.judgements if j is not None}
     candidates = pd.read_sql("SELECT pair_key, similarity_pct FROM candidates", con)
+    span_text = dict(con.execute("SELECT span_id, text FROM spans"))
     tables = build_relations(
-        units, judgements, rel.judge.threshold, candidates, set(rel.judge.validated)
-    )
+        units, judgements, rel.judge.threshold, candidates, set(rel.judge.validated),
+        span_text=span_text,
+    )  # fmt: skip
+    n_reviewed = apply_edge_reviews(cfg, con, tables)
+    if n_reviewed:  # 검수로 확인·거절한 관계를 후보 상태에도 반영
+        tables.candidate_status = candidate_status(
+            candidates, units, tables.unit_judgements, tables.edges
+        )
     e = tables.edges
     summary = {
         r: {d: int(((e["relation"] == r) & (e["decision"] == d)).sum()) for d in ("accepted", "uncertain")}
@@ -252,8 +259,51 @@ def relations_from_cache(cfg: Config, con: sqlite3.Connection):
         "validated_relations": rel.judge.validated,
         "units": {"total": len(units), "judged": len(judgements)},
         "edges": summary,
+        "edge_reviews": n_reviewed,
     }
     return tables, meta
+
+
+def edge_evidence_texts(con: sqlite3.Connection, evidence: pd.DataFrame) -> dict[str, list]:
+    """edge_id → [(span_id, 도입문 포함 원문)] (근거 해시용). evidence: edge_evidence 형식."""
+    if evidence.empty:
+        return {}
+    from .reviews import span_full_text
+
+    text = {
+        sid: span_full_text(t, lead)
+        for sid, t, lead in con.execute("SELECT span_id, text, lead_text FROM spans")
+    }
+    out: dict[str, list] = {}
+    for edge_id, span_id in zip(evidence["edge_id"], evidence["span_id"], strict=True):
+        out.setdefault(edge_id, []).append((span_id, text.get(span_id, "")))
+    return out
+
+
+def apply_edge_reviews(cfg: Config, con: sqlite3.Connection, tables) -> dict:
+    """reviews.sqlite의 관계 검수를 edges.review_state에 반영한다 (사람의 결정이 우선, 7.5).
+    근거가 바뀐 관계는 needs_recheck로 두고, 사라진 관계의 검수는 세기만 한다."""
+    from . import reviews
+
+    path = reviews_path(cfg)
+    if not path.exists() or tables.edges.empty:
+        return {}
+    latest = reviews.latest_edge_reviews(reviews.connect(path))
+    if not latest:
+        return {}
+    texts = edge_evidence_texts(con, tables.edge_evidence)
+    states = {
+        edge_id: reviews.review_state(latest.get(edge_id), reviews.evidence_hash(texts.get(edge_id, [])))
+        for edge_id in tables.edges["edge_id"]
+    }  # fmt: skip
+    tables.edges["review_state"] = tables.edges["edge_id"].map(states)
+    counts = tables.edges["review_state"].value_counts().to_dict()
+    counts["missing"] = len(set(latest) - set(tables.edges["edge_id"]))
+    if counts["missing"]:
+        log.warning(
+            "검수했지만 이번 판정에 없는 관계 %d개 (검수 기록은 그대로 둡니다)", counts["missing"]
+        )
+    return {k: int(v) for k, v in counts.items()}
 
 
 def stage_judge_all(cfg: Config, model: str | None = None, tables=None, cands=None) -> Path:

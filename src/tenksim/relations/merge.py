@@ -72,8 +72,10 @@ def build_relations(
     threshold: Callable[[str], tuple[float, float]],
     candidates: pd.DataFrame,
     validated: set[str],
+    span_text: dict[str, str] | None = None,
 ) -> RelationTables:
-    """candidates: pair_key, similarity_pct (graph.db의 candidates)."""
+    """candidates: pair_key, similarity_pct (graph.db의 candidates).
+    span_text: span_id → 원문. 주면 같은 문장의 반복(Item 1과 1A)과 겹치는 구간을 근거에서 하나로 합친다."""
     uj = unit_frame(units, judgements, threshold)
     edges, evidence = [], []
     sim = candidates.set_index("pair_key")["similarity_pct"].to_dict()
@@ -86,7 +88,7 @@ def build_relations(
                 )  # fmt: skip
                 if chosen.empty:
                     continue
-                chosen = chosen.sort_values(f"s_{r}", ascending=False)
+                chosen = _dedupe(chosen.sort_values(f"s_{r}", ascending=False), span_text)
                 src, dst = pair_key.split("|")
                 edge_id = f"{r}|{pair_key}"
                 top = chosen.iloc[0]
@@ -108,8 +110,38 @@ def build_relations(
     edges_df = pd.DataFrame(edges, columns=EDGE_COLUMNS)
     evidence_df = pd.DataFrame(evidence, columns=EVIDENCE_COLUMNS)
     return RelationTables(
-        uj, edges_df, evidence_df, _candidate_status(candidates, units, uj, edges_df)
+        uj, edges_df, evidence_df, candidate_status(candidates, units, uj, edges_df)
     )
+
+
+def _span_range(span_id: str) -> tuple[str, str, int, int] | None:
+    """s:<accession>:<section>:<start>-<end> → (accession, section, start, end)."""
+    try:
+        _, accession, section, span = span_id.split(":")
+        start, end = span.split("-")
+        return accession, section, int(start), int(end)
+    except ValueError:
+        return None
+
+
+def _dedupe(chosen: pd.DataFrame, span_text: dict[str, str] | None) -> pd.DataFrame:
+    """점수 높은 순으로 보며, 같은 10-K에서 이미 고른 근거와 문장이 같거나 구간이 겹치면 뺀다.
+    다른 회사 10-K의 같은 문장은 서로 다른 진술이므로 남긴다."""
+    if not span_text:
+        return chosen
+    keep, texts, ranges = [], set(), []
+    for i, row in enumerate(chosen.itertuples()):
+        text = " ".join((span_text.get(row.span_id) or "").split())
+        rng = _span_range(row.span_id)
+        if text and (row.doc_node, text) in texts:
+            continue
+        if rng and any(r[:2] == rng[:2] and r[2] < rng[3] and rng[2] < r[3] for r in ranges):
+            continue
+        keep.append(i)
+        texts.add((row.doc_node, text))
+        if rng:
+            ranges.append(rng)
+    return chosen.iloc[keep]
 
 
 EDGE_COLUMNS = [
@@ -120,22 +152,29 @@ EDGE_COLUMNS = [
 EVIDENCE_COLUMNS = ["edge_id", "span_id", "target_node", "question", "score", "decision", "ord"]
 
 
-def _candidate_status(
+def candidate_status(
     candidates: pd.DataFrame, units: pd.DataFrame, uj: pd.DataFrame, edges: pd.DataFrame
 ) -> pd.Series:
+    """후보 쌍의 판정 결과. 관계의 검수 상태(review_state)가 있으면 모델 판정보다 우선한다."""
     has_units = set(units["pair_key"])
     all_judged = {
         k for k, g in units.groupby("pair_key") if set(g["unit_id"]) <= set(uj.get("unit_id", []))
     }
     pair = edges["src"] + "|" + edges["dst"]
-    accepted = set(pair[edges["decision"] == "accepted"])
-    uncertain = set(pair[edges["decision"] == "uncertain"])
+    review = edges["review_state"].fillna("")
+    shown = ((edges["decision"] == "accepted") & (review != "rejected")) | (review == "accepted")
+    waiting = (edges["decision"] == "uncertain") & ~review.isin(["accepted", "rejected"])
+    accepted = set(pair[shown])
+    uncertain = set(pair[waiting])
+    reviewed_out = set(pair) - accepted - uncertain  # 관계는 있었지만 사람이 모두 거절
 
     def status(k: str) -> str:
         if k in accepted:
             return "accepted"
         if k in uncertain:
             return "uncertain"
+        if k in reviewed_out:
+            return "rejected_by_review"
         if k not in has_units:
             return "similar"  # 이름 언급이 없어 판정할 근거가 없는 유사도 후보
         if k in all_judged:

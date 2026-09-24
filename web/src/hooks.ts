@@ -1,10 +1,19 @@
 import { useEffect, useState } from "react";
 
-// 주소: #/node/<node_id>?pair=<pair_key>  (둘 다 인코딩)
-// 검수: #/review, #/review/<sample_id>/<ord>
+// 주소 (모두 인코딩):
+// 회사:      #/node/<node_id>                    관계 화면
+//            #/node/<node_id>?edge=<edge_id>     관계 하나를 고른 상태
+//            #/node/<node_id>?tab=candidates&pair=<pair_key>   판정 전 후보 화면
+// 관계 검수: #/queue, #/queue?edge=<edge_id>
+// 표본 검수: #/review, #/review/<sample_id>/<ord>
+export type NodeTab = "relations" | "candidates";
+
 export interface Route {
   node: string | null;
+  tab: NodeTab;
   pair: string | null;
+  edge: string | null;
+  queue: boolean;
   review: boolean;
   sample: string | null;
   ord: number | null;
@@ -16,9 +25,14 @@ function parseHash(): Route {
   const m = path.match(/^\/node\/(.+)$/);
   const r = path.match(/^\/review(?:\/([^/]+)(?:\/(\d+))?)?$/);
   const params = new URLSearchParams(query);
+  const pair = params.get("pair");
   return {
     node: m ? decodeURIComponent(m[1]) : null,
-    pair: params.get("pair"),
+    // 예전 주소(?pair=만 있음)도 후보 화면으로 연다
+    tab: params.get("tab") === "candidates" || (pair && !params.get("tab")) ? "candidates" : "relations",
+    pair,
+    edge: params.get("edge"),
+    queue: path === "/queue",
     review: !!r,
     sample: r?.[1] ? decodeURIComponent(r[1]) : null,
     ord: r?.[2] ? Number(r[2]) : null,
@@ -30,9 +44,20 @@ export function reviewHref(sample?: string, ord?: number): string {
   return ord == null ? `#/review/${encodeURIComponent(sample)}` : `#/review/${encodeURIComponent(sample)}/${ord}`;
 }
 
-export function href(node: string, pair?: string | null): string {
+export function queueHref(edge?: string | null): string {
+  return edge ? `#/queue?edge=${encodeURIComponent(edge)}` : "#/queue";
+}
+
+/** 회사 관계 화면. edge를 주면 그 관계를 고른 상태로 연다. */
+export function href(node: string, edge?: string | null): string {
   const base = `#/node/${encodeURIComponent(node)}`;
-  return pair ? `${base}?pair=${encodeURIComponent(pair)}` : base;
+  return edge ? `${base}?edge=${encodeURIComponent(edge)}` : base;
+}
+
+/** 회사의 판정 전 후보 화면. */
+export function candidatesHref(node: string, pair?: string | null): string {
+  const base = `#/node/${encodeURIComponent(node)}?tab=candidates`;
+  return pair ? `${base}&pair=${encodeURIComponent(pair)}` : base;
 }
 
 export function useRoute(): Route {

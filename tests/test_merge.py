@@ -98,3 +98,26 @@ def test_export_writes_relations_and_checks_references(tmp_path):
     ).fetchone() == ("accepted",)
     assert con.execute("SELECT COUNT(*) FROM unit_judgements").fetchone()[0] == 1
     assert dict(con.execute("SELECT key, value FROM meta"))["edges"] == "test"
+
+
+def test_repeated_or_overlapping_sentences_become_one_evidence():
+    units = [
+        {"unit_id": f"{sid}|{B}", "span_id": sid, "doc_node": A, "target_node": B,
+         "pair_key": f"{A}|{B}", "accession": "acc"}
+        for sid in ("s:acc:business:0-50", "s:acc:business:0-80", "s:acc:risk_factors:10-60",
+                    "s:acc:risk_factors:500-560")
+    ]  # fmt: skip
+    text = {
+        "s:acc:business:0-50": "Our largest customer, B, was 21% of sales.",
+        "s:acc:business:0-80": "Our largest customer, B, was 21% of sales. It buys widgets.",  # 겹침
+        "s:acc:risk_factors:10-60": "Our largest customer, B, was 21%  of sales.",  # 1A에 반복
+        "s:acc:risk_factors:500-560": "We also license patents to B.",
+    }
+    judgements = {u["unit_id"]: judged(u, business=0.9 + i / 100) for i, u in enumerate(units)}
+    r = build_relations(
+        pd.DataFrame(units), judgements, threshold, CANDIDATES, set(), span_text=text
+    )
+    ev = r.edge_evidence[r.edge_evidence["edge_id"] == f"business|{A}|{B}"]
+    assert list(ev["span_id"]) == ["s:acc:risk_factors:500-560", "s:acc:risk_factors:10-60",
+                                   "s:acc:business:0-80"]  # fmt: skip
+    assert r.edges.set_index("edge_id").at[f"business|{A}|{B}", "n_evidence"] == 3

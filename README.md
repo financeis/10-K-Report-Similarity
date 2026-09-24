@@ -131,7 +131,7 @@ $ uv run tenksim explain -c configs/smoke.yaml --method minilm SNPS CDNS --top 1
 
 10-K에서 기업 간 관계(경쟁·공급·협력·지분)를 근거 문장과 함께 찾아 보여주는 단독 웹앱입니다.
 설계와 진행 상황은 [docs/relation-map-plan.md](docs/relation-map-plan.md)에 있습니다.
-지금은 **판정 전 후보**(유사도 상위 기업 ∪ 10-K에 이름이 나온 기업)와 근거 문장까지 볼 수 있습니다.
+회사를 고르면 **관계도**(경쟁 · 공급·협력 · 지분, 방향 없음)와 관계마다 근거 문장이 나옵니다. 판정 모델이 불확실로 남긴 관계는 '관계 검수'에서 맞음·아님으로 정하고, 판정 전 후보(유사도 상위 기업 ∪ 10-K에 이름이 나온 기업)는 회사 화면의 둘째 탭에서 봅니다.
 
 ```bash
 uv sync --extra app                                        # 웹앱 의존성 (FastAPI)

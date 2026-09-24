@@ -11,6 +11,7 @@ export interface NodeSummary {
   analyzed: number;
   n_candidates: number;
   n_mention_candidates: number;
+  n_relations: number;
 }
 
 export interface Filing {
@@ -80,6 +81,7 @@ export interface EvidenceSpan {
 export interface Figure {
   figure_id: string;
   span_id: string;
+  doc_node?: string; // 관계 화면에서만: 수치가 나온 10-K의 회사
   target_node: string;
   subject: string;
   value: number | null;
@@ -114,6 +116,7 @@ export interface CandidateDetail {
   b: PairNode;
   spans: EvidenceSpan[];
   figures: Figure[];
+  edges: { edge_id: string; relation: string; state: string }[];
 }
 
 export interface Mark {
@@ -152,6 +155,78 @@ async function get<T>(path: string): Promise<T> {
 
 const enc = encodeURIComponent;
 
+// ---------------------------------------------------------------- 관계 (2단계)
+
+/** 방향 없는 관계 세 가지 (계획서 5장). */
+export type RelationType = "competitor" | "business" | "equity";
+
+/** 화면에 쓰는 최종 상태: 사람 확인 > 모델 채택 > 검수 대기, 사람이 거절한 것은 따로. */
+export type EdgeState = "confirmed" | "accepted" | "uncertain" | "rejected";
+
+export interface EdgeBase {
+  edge_id: string;
+  src: string;
+  dst: string;
+  relation: RelationType;
+  decision: "accepted" | "uncertain";
+  validated: number;
+  status: "current" | "historical" | "planned" | "unclear" | null;
+  score: number | null;
+  n_evidence: number;
+  similarity_pct: number | null;
+  model_id: string | null;
+  question_version: string | null;
+  review_state: "accepted" | "rejected" | "needs_recheck" | null;
+  review?: { verdict: string; note: string | null; reviewed_at: string };
+  state: EdgeState;
+}
+
+export interface NodeRelation extends EdgeBase {
+  other_id: string;
+  other_kind: NodeKind;
+  other_ticker: string | null;
+  other_name: string;
+  other_sector: string | null;
+}
+
+export interface EdgeEvidence {
+  span_id: string;
+  target_node: string;
+  doc_node: string;
+  section: string;
+  text: string;
+  lead_text: string | null;
+  filing_date: string | null;
+  filing_url: string | null;
+  score: number | null;
+  s_is_entity: number | null;
+  unit_status: string | null;
+  ord: number;
+  highlights: Highlight[];
+}
+
+export interface EdgeDetail extends EdgeBase {
+  a: PairNode;
+  b: PairNode;
+  evidence_hash: string;
+  /** 질문별 [채택, 기각] 임계값 (graph.db를 만들 때 쓴 값) */
+  thresholds: Record<string, [number, number]>;
+  candidate: { rank_ab: number | null; rank_ba: number | null; source: Source } | null;
+  evidence: EdgeEvidence[];
+  figures: Figure[];
+}
+
+export interface QueueEdge extends EdgeBase {
+  a_name: string;
+  a_ticker: string | null;
+  a_sector: string | null;
+  a_kind: NodeKind;
+  b_name: string;
+  b_ticker: string | null;
+  b_sector: string | null;
+  b_kind: NodeKind;
+}
+
 export const api = {
   meta: () => get<Record<string, string>>("/api/meta"),
   search: (q: string) => get<NodeSummary[]>(`/api/nodes?q=${enc(q)}&limit=60`),
@@ -159,6 +234,8 @@ export const api = {
   candidates: (id: string) => get<CandidateRow[]>(`/api/nodes/${enc(id)}/candidates`),
   candidate: (key: string) => get<CandidateDetail>(`/api/candidates/${enc(key)}`),
   context: (spanId: string) => get<SpanContext>(`/api/spans/${enc(spanId)}/context`),
+  relations: (id: string) => get<NodeRelation[]>(`/api/nodes/${enc(id)}/relations`),
+  edge: (id: string) => get<EdgeDetail>(`/api/edges/${enc(id)}`),
 };
 
 // ---------------------------------------------------------------- 표본 검수
@@ -236,6 +313,16 @@ export interface LabelIn {
   note: string | null;
 }
 
+/** 서버가 거절한 요청. status로 종류를 가린다 (409: 그 사이 근거가 바뀜 등). */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+  }
+}
+
 async function post<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(path, {
     method: "POST",
@@ -249,12 +336,21 @@ async function post<T>(path: string, body: unknown): Promise<T> {
     } catch {
       /* 본문이 JSON이 아니면 상태 문구만 */
     }
-    throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+    throw new ApiError(typeof detail === "string" ? detail : JSON.stringify(detail), res.status);
   }
   return res.json() as Promise<T>;
 }
 
+export interface EdgeReviewIn {
+  edge_id: string;
+  verdict: "accept" | "reject";
+  note: string | null;
+  evidence_hash: string; // 검수자가 본 근거. 그 사이 근거가 바뀌었으면 서버가 409로 거절한다
+}
+
 export const reviewApi = {
+  edgeQueue: (includeDone: boolean) => get<QueueEdge[]>(`/api/review/edges?include_done=${includeDone}`),
+  saveEdge: (body: EdgeReviewIn) => post<{ review_id: number; edge: EdgeBase }>("/api/review/edges", body),
   samples: () => get<SampleProgress[]>("/api/review/samples"),
   sample: (id: string) => get<SampleDetail>(`/api/review/samples/${enc(id)}`),
   unit: (id: string, ord: number) => get<ReviewUnit>(`/api/review/samples/${enc(id)}/units/${ord}`),

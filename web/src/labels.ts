@@ -23,6 +23,7 @@ export const EXCLUDED: Record<string, string> = {
   "context:listing": "상장 거래소 표기",
   "context:index": "지수 언급",
   "context:credit_rating": "신용등급",
+  "context:esg_rating": "ESG·지속가능성 평가",
   "context:trademark": "상표 문구",
   "context:other_meaning": "다른 뜻(제품명 등)",
   "context:other_company": "이름이 같은 다른 회사",
@@ -63,3 +64,49 @@ export function excludedLabel(reason: string | null): string {
     .map((r) => EXCLUDED[r] ?? r)
     .join(", ");
 }
+
+// ---------------------------------------------------------------- 관계 (2단계)
+
+export const RELATION: Record<string, string> = {
+  competitor: "경쟁",
+  business: "공급·협력",
+  equity: "지분",
+};
+
+export const RELATION_HINT: Record<string, string> = {
+  competitor: "서로 경쟁하거나, 한쪽이 다른 쪽을 경쟁사로 적음",
+  business: "제품·서비스를 사고팔거나 제휴·합작·라이선스·유통 관계 (방향은 따지지 않음)",
+  equity: "한쪽이 다른 쪽의 주식·지분을 가지고 있거나 가졌음 (모회사·분사 포함)",
+};
+
+// 관계 선 색. 섹터 색(점)과 겹치지 않게 채도가 다른 색을 쓴다.
+export const RELATION_COLOR: Record<string, string> = {
+  competitor: "#d1495b",
+  business: "#2a9d8f",
+  equity: "#e9a03b",
+};
+
+export const RELATIONS = ["competitor", "business", "equity"] as const;
+
+export const STATUS: Record<string, string> = {
+  current: "현재",
+  historical: "과거",
+  planned: "계획",
+  unclear: "시점 불명",
+};
+
+export const STATE: Record<string, string> = {
+  confirmed: "검수로 확인",
+  accepted: "채택",
+  uncertain: "검수 대기",
+  rejected: "검수로 거절",
+};
+
+export const CANDIDATE_STATUS: Record<string, string> = {
+  accepted: "관계 채택",
+  uncertain: "검수 대기",
+  rejected: "관계 없음 (판정)",
+  rejected_by_review: "검수로 거절",
+  similar: "유사도만 (이름 언급 없음)",
+  pending: "판정 전",
+};
