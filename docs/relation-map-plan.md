@@ -491,10 +491,12 @@ scores = {name: (a.noul if hasattr(a, "noul") else a.choice) for name, a in resp
 |---|---|
 | `nodes` | node_id, kind(company/external/anonymous), cik, ticker, name, gics_sector, gics_sub_industry |
 | `filings` | accession, node_id, form, filing_date, period_of_report, filing_url |
+| `documents` | accession, section, status, text_hash, 정제 텍스트 (근거 위치의 기준, 원문 확인 화면용) |
 | `mentions` | mention_id, doc_node, target_node, matched_name, span_id |
 | `spans` | span_id, accession, section, text_hash, char_start, char_end, text |
 | `figures` | figure_id, span_id, subject, value, operator, period, denominator |
 | `candidates` | pair_key(정렬된 두 node_id), 출처 표시, 유사도 순위, status(pending/judged/accepted/rejected/uncertain) |
+| `candidate_spans` | pair_key, span_id, 순서, 단서 단어 (쌍별 판정 입력) |
 | `answers` | 7.3의 `Answer` 전부 (질문별 판정 기록) |
 | `edges` | edge_id, src, dst, relation, subtype, directed, status(시점), basis, score, model_id, question_version, similarity_pct, resid_corr, as_of(accession), review_state |
 | `edge_evidence` | edge_id, span_id, 판정한 질문 |
@@ -726,7 +728,7 @@ relations:
 |---|---|---|
 | 0-1 | 이름 언급(`tenksim mentions`): 회사명 사전·별칭·분사 시점, 문맥 제외, 임원 약력 제외, 근거 구간·도입문, 익명 고객, 매출 비중 후보 | 완료 (2026-09-24) |
 | 0-2 | 후보(`tenksim candidates`): 유사도 상위 K ∪ 언급 쌍, 상태 `pending`, 쌍별 근거 구간 선택(10-K 쪽마다 최대 6개, 단서 종류별로 번갈아). K=20에서 6,864쌍(유사도만 5,327 · 둘 다 775 · 언급만 762, 외부·익명 기업 포함 153). 추론 입력(회사 개요, 비슷한 청크)은 판정과 함께 1단계에서 | 완료 (2026-09-24) |
-| 0-3 | `graph.db` 내보내기(노드·공시·언급·구간·후보) | |
+| 0-3 | `graph.db` 내보내기(`tenksim export`): 스키마 버전 1 확정, 노드·공시·정제 문서·언급·구간·매출 비중·후보·쌍별 근거 구간. 판정·관계 테이블은 빈 채로 만들어 둠. 참조 무결성과 근거 위치(정제 텍스트 기준)를 내보낼 때 검사. S&P 500 기준 72MB | 완료 (2026-09-24) |
 | 0-4 | 웹앱: 판정 전 후보 보기, 근거 원문 확인, 가림 검수 화면 | |
 
 ## 11. 규모와 비용 추정

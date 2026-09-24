@@ -5,12 +5,14 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime
+from pathlib import Path
 
 import pandas as pd
 
 from ..config import Config, RelationsConfig
 from ..pipeline import load_documents, load_universe, similarity_for
 from .candidates import Candidates, build_candidates
+from .export import export_graph
 from .mentions import MentionTables, find_mentions, text_hash
 from .names import build_dictionary, load_aliases
 
@@ -25,13 +27,22 @@ def relations_config(cfg: Config) -> RelationsConfig:
     return cfg.relations
 
 
+def graph_path(cfg: Config) -> Path:
+    return cfg.relations_dir / "graph.db"
+
+
+def analyzed_documents(cfg: Config) -> pd.DataFrame:
+    """이름 언급을 찾는 10-K 섹션: 추출 품질 판정을 통과한 것."""
+    docs = load_documents(cfg)
+    allowed = {"ok"} if cfg.text.exclude_suspect else {"ok", "suspect"}
+    return docs[docs["status"].isin(allowed)]
+
+
 def stage_mentions(cfg: Config) -> MentionTables:
     """분석 가능한 10-K 섹션에서 회사 이름 언급을 찾는다. 몇 초면 끝나므로 매번 새로 만든다."""
     rel = relations_config(cfg)
     universe = load_universe(cfg)
-    docs = load_documents(cfg)
-    allowed = {"ok"} if cfg.text.exclude_suspect else {"ok", "suspect"}
-    docs = docs[docs["status"].isin(allowed)]
+    docs = analyzed_documents(cfg)
 
     aliases = load_aliases(rel.aliases)
     dictionary = build_dictionary(universe, aliases)
@@ -125,3 +136,36 @@ def load_candidates(cfg: Config) -> Candidates:
     return Candidates(
         pd.read_parquet(d / "candidates.parquet"), pd.read_parquet(d / "candidate_spans.parquet")
     )
+
+
+def stage_export(
+    cfg: Config, tables: MentionTables | None = None, cands: Candidates | None = None
+) -> Path:
+    """언급·후보를 웹앱이 읽는 graph.db로 내보낸다."""
+    rel = relations_config(cfg)
+    tables = tables if tables is not None else load_mentions(cfg)
+    cands = cands if cands is not None else load_candidates(cfg)
+    d = cfg.relations_dir
+    meta = {
+        "config": cfg.name,
+        "filings_year": str(cfg.filings.year),
+        "similarity": rel.similarity or "",
+        "top_k": str(rel.top_k),
+        "mentions": json.loads((d / "mentions_meta.json").read_text()),
+        "candidates": json.loads((d / "candidates_meta.json").read_text()),
+    }
+    return export_graph(
+        graph_path(cfg),
+        tables=tables,
+        candidates=cands,
+        universe=load_universe(cfg),
+        documents=analyzed_documents(cfg),
+        meta=meta,
+    )
+
+
+def stage_relations(cfg: Config) -> Path:
+    """이름 언급 → 후보 → graph.db를 이어서 만든다."""
+    tables = stage_mentions(cfg)
+    cands = stage_candidates(cfg, tables)
+    return stage_export(cfg, tables, cands)

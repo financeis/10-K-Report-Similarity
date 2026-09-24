@@ -69,6 +69,10 @@ def cmd_run(cfg: Config, args) -> None:
     metrics = pipeline.stage_evaluate(cfg, universe, docs, results)
     path = write_report(cfg, metrics, docs, universe)
     log.info("Report written to %s", path)
+    if cfg.relations is not None:
+        from .relations.stages import stage_relations
+
+        log.info("Graph database: %s", stage_relations(cfg))
 
 
 def _find(res: pipeline.MethodResult, ticker: str) -> int:
@@ -193,6 +197,13 @@ def _print_candidates(cands, tables, ticker: str, show_spans: bool) -> None:
                 print(f"    [{who} 10-K · {s.cues or '-'}] {snippet}")
 
 
+def cmd_export(cfg: Config, args) -> None:
+    from .relations.stages import stage_export, stage_relations
+
+    path = stage_relations(cfg) if args.all else stage_export(cfg)
+    log.info("Graph database: %s", path)
+
+
 def main(argv: list[str] | None = None) -> None:
     # 설치 위치가 아니라 명령을 실행한 폴더에서 .env를 찾는다
     load_dotenv(find_dotenv(usecwd=True))
@@ -210,7 +221,9 @@ def main(argv: list[str] | None = None) -> None:
         p.set_defaults(func=func)
         return p
 
-    p = add("run", "전체 단계 실행 (ingest → embed → evaluate)", cmd_run)
+    p = add(
+        "run", "전체 단계 실행 (ingest → embed → evaluate, relations가 있으면 관계도까지)", cmd_run
+    )
     p.add_argument("--refresh", action="store_true", help="받아 둔 10-K도 다시 받는다")
     p = add("ingest", "기업 목록 구성 + 10-K 섹션 수집 + 정제/품질 판정", cmd_ingest)
     p.add_argument("--refresh", action="store_true", help="받아 둔 10-K도 다시 받는다")
@@ -238,6 +251,8 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--ticker", help="이 회사의 후보를 출력")
     p.add_argument("--spans", action="store_true", help="후보마다 판정에 넣을 근거 구간도 출력")
     p.add_argument("--cached", action="store_true", help="다시 만들지 않고 저장된 결과만 출력")
+    p = add("export", "관계도: 웹앱이 읽는 graph.db 만들기", cmd_export)
+    p.add_argument("--all", action="store_true", help="이름 언급과 후보도 새로 만든 뒤 내보낸다")
 
     args = parser.parse_args(argv)
     _setup_logging(args.verbose)
