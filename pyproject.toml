@@ -28,6 +28,8 @@ openai = ["openai>=1.40", "tiktoken>=0.7"]
 returns = ["yfinance>=0.2.54", "curl_cffi>=0.15"]
 # 관계도 웹앱 (tenksim serve)
 app = ["fastapi>=0.115", "uvicorn>=0.30"]
+# 관계 판정 모델 Jev (유료, TYPESAFE_API_KEY 필요)
+judge = ["typesafe-sdk>=0.7.1"]
 dev = ["pytest>=8", "ruff>=0.6", "httpx>=0.25"]
 
 [project.scripts]

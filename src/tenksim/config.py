@@ -159,6 +159,27 @@ class SpanConfig(_Strict):
     """후보 쌍 하나의 판정 입력에 넣을 근거 구간 수 (한 회사의 10-K 쪽마다)."""
 
 
+class JudgeConfig(_Strict):
+    model: str = "jev-1.13.0"
+    """판정 모델. 임계값을 맞출 때는 버전을 고정한다 (jev-latest는 가리키는 버전이 바뀐다)."""
+    concurrency: int = Field(6, ge=1, le=32)
+    """동시에 보내는 요청 수. Jev 한도는 분당 1,200 요청."""
+    context: Literal["span", "nearby", "pair"] = "nearby"
+    """판정 입력: span(근거 구간만), nearby(+ 앞뒤 문단), pair(+ 같은 쌍의 다른 근거 구간)."""
+    context_chars: int = Field(1000, ge=0)
+    """nearby일 때 앞뒤로 넣는 최대 글자 수 (쪽마다)."""
+    accept: float = Field(0.8, ge=0, le=1)
+    """점수가 이 값 이상이면 채택."""
+    reject: float = Field(0.3, ge=0, le=1)
+    """점수가 이 값 미만이면 기각. 그 사이는 불확실(재판정·검수 대상)."""
+
+    @model_validator(mode="after")
+    def _check_thresholds(self) -> JudgeConfig:
+        if self.reject > self.accept:
+            raise ValueError("judge.reject는 judge.accept보다 클 수 없습니다")
+        return self
+
+
 class RelationsConfig(_Strict):
     """기업 관계도 (docs/relation-map-plan.md)."""
 
@@ -168,6 +189,7 @@ class RelationsConfig(_Strict):
     """1차 후보에 쓸 유사도 (방법·변형·앙상블 이름). 비우면 이름 언급만 후보로 쓴다."""
     top_k: int = 20
     spans: SpanConfig = Field(default_factory=SpanConfig)
+    judge: JudgeConfig = Field(default_factory=JudgeConfig)
 
 
 class Config(_Strict):

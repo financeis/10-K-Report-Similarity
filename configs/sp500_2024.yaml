@@ -81,3 +81,8 @@ relations:
   aliases: configs/aliases.yaml
   similarity: tfidf-openai   # 1차 후보: 이 유사도의 상위 top_k ∪ 이름 언급
   top_k: 20
+  judge:
+    model: jev-1.13.0   # 판정 모델 (버전 고정). tenksim judge / eval-relations
+    context: nearby     # 판정 입력: 근거 문장 + 앞뒤 문단 (dev1에서 span·pair보다 나음)
+    accept: 0.8         # 이 점수 이상이면 채택
+    reject: 0.3         # 이 점수 미만이면 기각, 그 사이는 불확실

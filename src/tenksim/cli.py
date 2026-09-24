@@ -29,6 +29,7 @@ def _setup_logging(verbose: bool) -> None:
     for name in (
         "httpx",
         "httpx2",
+        "typesafe_sdk",
         "httpcore",
         "urllib3",
         "huggingface_hub",
@@ -244,6 +245,33 @@ def cmd_sample(cfg: Config, args) -> None:
     )
 
 
+def cmd_judge(cfg: Config, args) -> None:
+    import json
+
+    from .relations.stages import make_judge, sample_requests, stage_judge
+
+    if args.dry_run:
+        judge = make_judge(cfg, args.model)
+        requests = sample_requests(cfg, args.sample, args.limit, args.context)
+        payload = judge.payload(requests[0])
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        chars = sum(len(json.dumps(judge.payload(r), ensure_ascii=False)) for r in requests)
+        print(
+            f"\n요청 {len(requests)}건, 입력 약 {chars / 4:,.0f}토큰 (글자 수 / 4로 어림). "
+            "--dry-run을 빼면 실제로 판정합니다."
+        )
+        return
+    stage_judge(cfg, args.sample, args.model, args.limit, context=args.context)
+
+
+def cmd_eval_relations(cfg: Config, args) -> None:
+    from .relations.stages import stage_eval
+
+    _, report, path = stage_eval(cfg, args.sample, args.model, context=args.context)
+    print(report)
+    log.info("채점 결과: %s (라벨과 어긋난 단위는 같은 폴더의 *_disagreements.csv)", path)
+
+
 def cmd_serve(cfg: Config, args) -> None:
     try:
         import uvicorn
@@ -327,6 +355,21 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--companies", type=int, default=10, help="회사 수")
     p.add_argument("--cap", type=int, default=40, help="회사당 최대 검수 단위 수")
     p.add_argument("--seed", type=int, default=0)
+    p = add(
+        "judge", "관계도: 표본 검수 단위를 판정 모델(Jev)로 판정 (결과는 캐시에 쌓임)", cmd_judge
+    )
+    p.add_argument("--sample", required=True, help="표본 이름 (예: dev1)")
+    p.add_argument("--model", help="판정 모델 (기본: 설정의 relations.judge.model)")
+    p.add_argument("--limit", type=int, help="앞에서부터 이 개수만 (시험용)")
+    p.add_argument("--dry-run", action="store_true", help="보내지 않고 첫 요청과 어림 토큰만 출력")
+    p.add_argument("--context", choices=["span", "nearby", "pair"],
+                   help="판정 입력 (기본: 설정의 relations.judge.context)")  # fmt: skip
+    p = add("eval-relations", "관계도: 판정을 표본 검수 라벨로 채점 (판정이 없으면 먼저 판정)",
+            cmd_eval_relations)  # fmt: skip
+    p.add_argument("--sample", required=True, help="표본 이름 (예: dev1)")
+    p.add_argument("--model", help="판정 모델 (기본: 설정의 relations.judge.model)")
+    p.add_argument("--context", choices=["span", "nearby", "pair"],
+                   help="판정 입력 (기본: 설정의 relations.judge.context)")  # fmt: skip
     p = add("serve", "관계도 웹앱 실행 (127.0.0.1)", cmd_serve)
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("--no-browser", action="store_true", help="브라우저를 자동으로 열지 않는다")
