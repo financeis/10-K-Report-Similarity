@@ -204,6 +204,46 @@ def cmd_export(cfg: Config, args) -> None:
     log.info("Graph database: %s", path)
 
 
+def cmd_sample(cfg: Config, args) -> None:
+    import sqlite3
+
+    from .relations import reviews
+    from .relations.stages import graph_path
+
+    path = graph_path(cfg)
+    if not path.exists():
+        raise SystemExit(f"{path}가 없습니다. 먼저 `tenksim export --all -c ...`를 실행하세요")
+    rev = reviews.connect(path.with_name("reviews.sqlite"))
+    if not args.name:
+        for s in reviews.sample_progress(rev):
+            print(
+                f"{s['sample_id']:<16} {s['purpose']:<8} 회사 {s['n_companies']:>3}  "
+                f"검수 {s['n_labeled']:>4} / {s['n_units']:<4} (보류 {s['n_skipped'] or 0})  "
+                f"{s['created_at']}"
+            )
+        return
+    graph = sqlite3.connect(f"file:{path.resolve().as_posix()}?mode=ro", uri=True)
+    graph.row_factory = sqlite3.Row
+    try:
+        res = reviews.create_sample(
+            rev, graph, sample_id=args.name, purpose=args.purpose, n_companies=args.companies,
+            per_company_cap=args.cap, seed=args.seed, config=cfg.name,
+        )  # fmt: skip
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    names = dict(graph.execute("SELECT node_id, name FROM nodes"))
+    print(
+        f"표본 {res.sample_id} ({args.purpose}): 회사 {len(res.companies)}곳, 검수 단위 {res.n_units}개"
+    )
+    for c in res.companies:
+        capped = f" (전체 {c['n_units_total']}개 중)" if c["n_units_total"] > c["n_units"] else ""
+        print(f"  {names.get(c['node_id'], c['node_id'])}: {c['n_units']}개{capped}")
+    minutes = res.n_units * 20 / 60
+    print(
+        f"건당 20초로 잡으면 약 {minutes:.0f}분입니다. `tenksim serve`에서 '표본 검수'로 들어가세요."
+    )
+
+
 def cmd_serve(cfg: Config, args) -> None:
     try:
         import uvicorn
@@ -280,6 +320,13 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--cached", action="store_true", help="다시 만들지 않고 저장된 결과만 출력")
     p = add("export", "관계도: 웹앱이 읽는 graph.db 만들기", cmd_export)
     p.add_argument("--all", action="store_true", help="이름 언급과 후보도 새로 만든 뒤 내보낸다")
+    p = add("sample", "관계도: 검수할 표본 회사 뽑기 (이름 없이 실행하면 표본 목록)", cmd_sample)
+    p.add_argument("--name", help="새 표본 이름 (예: dev1)")
+    p.add_argument("--purpose", choices=["dev", "confirm"], default="dev",
+                   help="dev: 질문·기준 조정용, confirm: 합격 판단용(한 번만 씀)")  # fmt: skip
+    p.add_argument("--companies", type=int, default=10, help="회사 수")
+    p.add_argument("--cap", type=int, default=40, help="회사당 최대 검수 단위 수")
+    p.add_argument("--seed", type=int, default=0)
     p = add("serve", "관계도 웹앱 실행 (127.0.0.1)", cmd_serve)
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("--no-browser", action="store_true", help="브라우저를 자동으로 열지 않는다")

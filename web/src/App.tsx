@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   api,
   type CandidateRow,
@@ -7,8 +7,11 @@ import {
   type NodeDetail,
   type NodeSummary,
 } from "./api";
+import { ErrorBox, NodeName } from "./Common";
+import { ContextModal } from "./ContextModal";
 import { Highlighted, type Range } from "./Highlighted";
-import { href, useFetch, useRoute } from "./hooks";
+import { href, reviewHref, useFetch, useRoute } from "./hooks";
+import { ReviewPage } from "./Review";
 import { CUE, KIND, OPERATOR, SECTION, SOURCE, excludedLabel, sectorColor } from "./labels";
 
 export function App() {
@@ -21,6 +24,10 @@ export function App() {
           10-K 관계도
         </a>
         <SearchBox />
+        <nav className="nav">
+          <a href="#/" className={!route.review ? "on" : ""}>후보 보기</a>
+          <a href={reviewHref()} className={route.review ? "on" : ""}>표본 검수</a>
+        </nav>
         {meta.data && (
           <span className="topbar-meta">
             {meta.data.filings_year}년 10-K · 후보 기준 {meta.data.similarity} 상위 {meta.data.top_k}
@@ -31,6 +38,8 @@ export function App() {
         <main className="page">
           <ErrorBox message={meta.error} />
         </main>
+      ) : route.review ? (
+        <ReviewPage sample={route.sample} ord={route.ord} />
       ) : route.node ? (
         <NodePage nodeId={route.node} pairKey={route.pair} />
       ) : (
@@ -443,88 +452,4 @@ function Figures({
       <p className="small muted">문장에서 코드로 뽑은 후보입니다. 판정 전이므로 원문으로 확인하세요.</p>
     </section>
   );
-}
-
-function ContextModal({ spanId, onClose }: { spanId: string; onClose: () => void }) {
-  const ctx = useFetch(`ctx:${spanId}`, () => api.context(spanId));
-  const body = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-  useEffect(() => {
-    body.current?.querySelector("#focus")?.scrollIntoView({ block: "center" });
-  }, [ctx.data]);
-  const ranges: Range[] = (ctx.data?.marks ?? []).map((m) => ({
-    start: m.start,
-    end: m.end,
-    className: m.kind,
-    id: m.kind === "span" ? "focus" : undefined,
-  }));
-  return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
-        <header>
-          {ctx.data && (
-            <div>
-              <b>{ctx.data.name}</b> {ctx.data.ticker && <span className="ticker">{ctx.data.ticker}</span>}
-              <span className="muted">
-                {" "}
-                · {SECTION[ctx.data.section] ?? ctx.data.section} · 제출 {ctx.data.filing_date}
-              </span>
-              <div className="small muted">
-                정제한 본문 {ctx.data.offset.toLocaleString()}번째 글자부터 · 표·쪽번호는 빠져 있습니다 ·{" "}
-                <a href={ctx.data.filing_url} target="_blank" rel="noreferrer">
-                  EDGAR 원문 ↗
-                </a>
-              </div>
-            </div>
-          )}
-          <button className="close" onClick={onClose} aria-label="닫기">
-            ×
-          </button>
-        </header>
-        <div className="modal-body" ref={body}>
-          {ctx.error && <ErrorBox message={ctx.error} />}
-          {ctx.data && (
-            <p className="doc">
-              <Highlighted text={ctx.data.excerpt} ranges={ranges} />
-            </p>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------- 공통
-
-function NodeName({
-  name,
-  ticker,
-  sector,
-  kind,
-}: {
-  name: string;
-  ticker: string | null;
-  sector: string | null;
-  kind: string;
-}) {
-  return (
-    <span className="node-name">
-      <span
-        className={kind === "anonymous" ? "dot hollow" : "dot"}
-        style={{ background: kind === "company" ? sectorColor(sector) : undefined }}
-        title={sector ?? KIND[kind]}
-      />
-      <span className="name">{name}</span>
-      {ticker && <span className="ticker">{ticker}</span>}
-      {KIND[kind] && <span className="tag">{KIND[kind]}</span>}
-    </span>
-  );
-}
-
-function ErrorBox({ message }: { message: string }) {
-  return <p className="error">불러오지 못했습니다: {message}</p>;
 }

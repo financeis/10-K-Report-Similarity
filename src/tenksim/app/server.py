@@ -1,7 +1,8 @@
 """관계도 웹앱 백엔드 (FastAPI). 127.0.0.1에서만 실행한다.
 
-graph.db는 읽기만 한다. 요청마다 읽기 전용 연결을 열고 닫는다. 파이프라인이 graph.db를 새로 만들어
-바꿔 끼울 때 파일이 열려 있으면 Windows에서 교체가 실패하기 때문이다.
+graph.db는 읽기만 하고, 검수 기록은 reviews.sqlite에만 쓴다. 두 파일 모두 요청마다 연결을 열고
+닫는다. 파이프라인이 graph.db를 새로 만들어 바꿔 끼울 때 파일이 열려 있으면 Windows에서 교체가
+실패하기 때문이다.
 
 주소는 티커가 아니라 node_id를 쓴다(외부 기업·익명 고객도 같은 방식으로 찾기 위해).
 node_id(cik:1045810)와 pair_key(cik:1|cik:2)는 경로에 넣을 때 URL 인코딩한다.
@@ -16,11 +17,27 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+
+from ..relations import reviews as reviews_mod
+from ..relations.mentions import text_hash
 
 STATIC_DIR = Path(__file__).parent / "static"
 
 
-def create_app(graph_db: Path) -> FastAPI:
+class LabelIn(BaseModel):
+    unit_id: str
+    sample_id: str | None = None
+    is_entity: str = "yes"
+    relations: list[str] = Field(default_factory=list)
+    status: str | None = None
+    partner_type: str | None = None
+    skipped: bool = False
+    note: str | None = None
+
+
+def create_app(graph_db: Path, reviews_db: Path | None = None) -> FastAPI:
+    reviews_db = reviews_db or graph_db.with_name("reviews.sqlite")
     app = FastAPI(title="tenksim relations", docs_url="/api/docs", openapi_url="/api/openapi.json")
     uri = f"file:{graph_db.resolve().as_posix()}?mode=ro"
 
@@ -211,6 +228,131 @@ def create_app(graph_db: Path) -> FastAPI:
                 "doc_length": len(text),
                 "marks": marks,
             }
+
+    # ------------------------------------------------------------ 표본 검수 (reviews.sqlite)
+
+    @contextmanager
+    def rdb():
+        con = reviews_mod.connect(reviews_db)
+        try:
+            yield con
+        finally:
+            con.close()
+
+    def node_names(con, ids) -> dict[str, dict]:
+        ids = list(set(ids))
+        if not ids:
+            return {}
+        marks = ",".join("?" * len(ids))
+        return {
+            r["node_id"]: r
+            for r in rows(
+                con,
+                f"SELECT node_id, kind, ticker, name, gics_sector FROM nodes "
+                f"WHERE node_id IN ({marks})",
+                *ids,
+            )
+        }
+
+    @app.get("/api/review/samples")
+    def review_samples():
+        with rdb() as r:
+            return reviews_mod.sample_progress(r)
+
+    @app.get("/api/review/samples/{sample_id}")
+    def review_sample(sample_id: str):
+        """표본 하나: 회사 목록과 검수 단위 목록(검수 여부만, 모델 판정은 없음)."""
+        with rdb() as r, db() as g:
+            sample = one(r, "SELECT * FROM samples WHERE sample_id = ?", sample_id)
+            companies = rows(r, "SELECT * FROM sample_companies WHERE sample_id = ?", sample_id)
+            units = rows(
+                r,
+                f"""
+                SELECT u.ord, u.unit_id, u.doc_node, u.target_node, u.pair_key,
+                       l.unit_id IS NOT NULL AS labeled, COALESCE(l.skipped, 0) AS skipped
+                FROM sample_units u
+                LEFT JOIN ({reviews_mod.LATEST_LABELS}) l ON l.unit_id = u.unit_id
+                WHERE u.sample_id = ? ORDER BY u.ord
+                """,
+                sample_id,
+            )
+            names = node_names(
+                g, [c["node_id"] for c in companies] + [u["target_node"] for u in units]
+                + [u["doc_node"] for u in units],
+            )  # fmt: skip
+            for c in companies:
+                c["node"] = names.get(c["node_id"])
+            return {"sample": sample, "companies": companies, "units": units, "nodes": names}
+
+    @app.get("/api/review/samples/{sample_id}/units/{ord}")
+    def review_unit(sample_id: str, ord: int):
+        """검수 단위 하나. 가림 검수이므로 유사도·출처·단서 단어·모델 판정은 보내지 않는다."""
+        with rdb() as r, db() as g:
+            u = one(r, "SELECT * FROM sample_units WHERE sample_id = ? AND ord = ?", sample_id, ord)
+            n = r.execute(
+                "SELECT COUNT(*) FROM sample_units WHERE sample_id = ?", (sample_id,)
+            ).fetchone()[0]
+            span = g.execute(
+                "SELECT s.*, f.filing_date, f.filing_url FROM spans s "
+                "LEFT JOIN filings f USING (accession) WHERE s.span_id = ?",
+                (u["span_id"],),
+            ).fetchone()
+            if span is None:
+                raise HTTPException(
+                    409,
+                    "graph.db를 다시 만들면서 이 근거 구간이 사라졌습니다. 표본을 새로 뽑아 주세요",
+                )
+            span = dict(span)
+            full = reviews_mod.span_full_text(span["text"], span["lead_text"])
+            names = node_names(g, [u["doc_node"], u["target_node"]])
+            highlights = [
+                {"start": m["char_start"] - span["char_start"],
+                 "end": m["char_end"] - span["char_start"]}
+                for m in rows(
+                    g,
+                    "SELECT char_start, char_end FROM mentions "
+                    "WHERE span_id = ? AND target_node = ? AND excluded IS NULL",
+                    u["span_id"], u["target_node"],
+                )
+            ]  # fmt: skip
+            return {
+                "sample_id": sample_id,
+                "ord": ord,
+                "n_units": n,
+                "unit_id": u["unit_id"],
+                "doc": names.get(u["doc_node"]),
+                "target": names.get(u["target_node"]),
+                "span_id": u["span_id"],
+                "section": span["section"],
+                "filing_date": span["filing_date"],
+                "filing_url": span["filing_url"],
+                "text": span["text"],
+                "lead_text": span["lead_text"],
+                "highlights": [h for h in highlights if 0 <= h["start"] < h["end"]],
+                "changed": text_hash(full) != u["span_hash"],
+                "label": reviews_mod.latest_label(r, u["unit_id"]),
+            }
+
+    @app.post("/api/review/labels")
+    def review_label(body: LabelIn):
+        with rdb() as r, db() as g:
+            if (
+                body.sample_id
+                and not r.execute(
+                    "SELECT 1 FROM sample_units WHERE sample_id = ? AND unit_id = ?",
+                    (body.sample_id, body.unit_id),
+                ).fetchone()
+            ):
+                raise HTTPException(404, "이 표본에 없는 검수 단위입니다")
+            try:
+                label_id = reviews_mod.record_label(
+                    r, g, unit=body.unit_id, sample_id=body.sample_id, is_entity=body.is_entity,
+                    relations=body.relations, status=body.status, partner_type=body.partner_type,
+                    skipped=body.skipped, note=body.note, blind=True,
+                )  # fmt: skip
+            except reviews_mod.LabelError as exc:
+                raise HTTPException(422, str(exc)) from exc
+            return {"label_id": label_id, "label": reviews_mod.latest_label(r, body.unit_id)}
 
     if STATIC_DIR.exists():
         app.mount("/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="assets")

@@ -140,6 +140,7 @@ cd web && npm install && npm run build && cd ..            # 화면 빌드 (Node
 uv run tenksim serve -c configs/sp500_2024.yaml            # http://127.0.0.1:8765 이 열립니다
 ```
 
+- **표본 검수:** `uv run tenksim sample -c configs/sp500_2024.yaml --name dev1 --purpose dev`로 표본 회사 10곳을 뽑은 뒤, 웹앱의 '표본 검수'에서 문장마다 관계를 고릅니다(모델 판정은 가려져 있습니다). 이름 없이 `tenksim sample`만 실행하면 표본별 진행 상황이 나옵니다. 검수 기록은 `data/runs/<name>/relations/reviews.sqlite`에 쌓이고, graph.db를 다시 만들어도 지워지지 않습니다.
 - 단계별로 돌리려면 `tenksim mentions`, `tenksim candidates`, `tenksim export`를 차례로 실행합니다. `--ticker NVDA`를 붙이면 그 회사 결과를 터미널에 출력합니다.
 - 회사 이름 사전(별칭, 분사 시점, 제외할 문맥)은 [configs/aliases.yaml](configs/aliases.yaml)에서 고칩니다.
 - 화면을 고치는 중에는 `tenksim serve --no-browser`를 켜 두고 `web/`에서 `npm run dev`를 실행하면 바로 반영됩니다.

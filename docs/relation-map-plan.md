@@ -505,7 +505,20 @@ scores = {name: (a.noul if hasattr(a, "noul") else a.choice) for name, a in resp
 - 방향 없는 관계(`competitor`, `partner`, `similar`)는 src·dst를 node_id 순서로 정렬해 저장합니다.
 - 기업 노드에 공시를 하나만 붙이지 않고, 공시(`filings`)와 근거(`spans`)가 각자 accession을 가집니다. 여러 연도로 넓히기 쉽게 하려는 것입니다.
 
-**검수 기록**은 별도 파일 `data/relations/reviews.sqlite`에 둡니다. graph.db는 만들 때마다 새로 써지기 때문입니다.
+**검수 기록**은 별도 파일 `data/runs/<name>/relations/reviews.sqlite`에 둡니다. graph.db는 만들 때마다 새로 써지기 때문입니다.
+
+표본 검수(7.6)의 구간 라벨 [0-4b에서 구현]
+
+| 테이블 | 주요 컬럼 |
+|---|---|
+| `samples` | sample_id, purpose(dev/confirm), seed, 회사당 상한, 뽑은 graph.db의 생성 시각 |
+| `sample_companies` | sample_id, node_id, 섹터, 상한 적용 전 단위 수 |
+| `sample_units` | sample_id, 순서, unit_id(구간 × 언급된 회사), 구간 원문 해시 |
+| `span_labels` | unit_id, is_entity(yes/no/unsure), relations(JSON: competitor, doc_supplies_target, target_supplies_doc, partner, doc_owns_target, target_owns_doc; 빈 배열 = 관계 아님), partner_type, status, skipped(보류), note, blind, 검수 당시 원문과 해시, 시각 |
+
+doc은 문장이 나온 10-K를 낸 회사, target은 그 문장이 언급한 회사입니다. 라벨은 덮어쓰지 않고 새 줄로 쌓으며, 단위마다 가장 최근 줄을 씁니다.
+
+관계 단위 검수 기록 (2단계, 운영 검수)
 
 | 컬럼 | 뜻 |
 |---|---|
@@ -730,7 +743,7 @@ relations:
 | 0-2 | 후보(`tenksim candidates`): 유사도 상위 K ∪ 언급 쌍, 상태 `pending`, 쌍별 근거 구간 선택(10-K 쪽마다 최대 6개, 단서 종류별로 번갈아). K=20에서 6,864쌍(유사도만 5,327 · 둘 다 775 · 언급만 762, 외부·익명 기업 포함 153). 추론 입력(회사 개요, 비슷한 청크)은 판정과 함께 1단계에서 | 완료 (2026-09-24) |
 | 0-3 | `graph.db` 내보내기(`tenksim export`): 스키마 버전 1 확정, 노드·공시·정제 문서·언급·구간·매출 비중·후보·쌍별 근거 구간. 판정·관계 테이블은 빈 채로 만들어 둠. 참조 무결성과 근거 위치(정제 텍스트 기준)를 내보낼 때 검사. S&P 500 기준 72MB | 완료 (2026-09-24) |
 | 0-4a | 웹앱 뼈대(`tenksim serve`, FastAPI + React/Vite): 회사 검색, 판정 전 후보 목록(출처·양쪽 유사도 순위·방향별 언급 수, 필터), 후보 쌍의 근거 문장(판정 입력 여부, 제외 이유, 이름 강조), 매출 비중 후보, 정제 본문 안에서 근거 보기 | 완료 (2026-09-24) |
-| 0-4b | 가림 검수 화면과 `reviews.sqlite`(구간 라벨), 표본 회사 뽑기 | |
+| 0-4b | 표본 뽑기(`tenksim sample`: 섹터별로 번갈아 회사 선택, 회사당 40단위 상한, 표본끼리 회사·문장·10-K가 겹치지 않음), 가림 검수 화면(모델 판정·유사도·단서 단어 없이 원문만. 회사 확인 → 관계(여러 개) → 시점, 키보드 입력), `reviews.sqlite`의 구간 라벨(덮어쓰지 않고 쌓음, 원문과 해시 보관) | 완료 (2026-09-24) |
 
 ## 11. 규모와 비용 추정
 

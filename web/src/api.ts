@@ -160,3 +160,112 @@ export const api = {
   candidate: (key: string) => get<CandidateDetail>(`/api/candidates/${enc(key)}`),
   context: (spanId: string) => get<SpanContext>(`/api/spans/${enc(spanId)}/context`),
 };
+
+// ---------------------------------------------------------------- 표본 검수
+
+export interface SampleProgress {
+  sample_id: string;
+  purpose: "dev" | "confirm";
+  created_at: string;
+  n_companies: number;
+  n_units: number;
+  n_labeled: number;
+  n_skipped: number | null;
+}
+
+export interface ReviewNode {
+  node_id: string;
+  kind: NodeKind;
+  ticker: string | null;
+  name: string;
+  gics_sector: string | null;
+}
+
+export interface SampleUnitRow {
+  ord: number;
+  unit_id: string;
+  doc_node: string;
+  target_node: string;
+  pair_key: string;
+  labeled: number;
+  skipped: number;
+}
+
+export interface SampleDetail {
+  sample: { sample_id: string; purpose: string; created_at: string; per_company_cap: number };
+  companies: { node_id: string; n_units_total: number; node: ReviewNode | null }[];
+  units: SampleUnitRow[];
+  nodes: Record<string, ReviewNode>;
+}
+
+export type Relation =
+  | "competitor"
+  | "doc_supplies_target"
+  | "target_supplies_doc"
+  | "partner"
+  | "doc_owns_target"
+  | "target_owns_doc";
+
+export interface SpanLabel {
+  is_entity: "yes" | "no" | "unsure";
+  relations: Relation[];
+  status: string | null;
+  partner_type: string | null;
+  skipped: number;
+  note: string | null;
+  labeled_at: string;
+}
+
+export interface ReviewUnit {
+  sample_id: string;
+  ord: number;
+  n_units: number;
+  unit_id: string;
+  doc: ReviewNode;
+  target: ReviewNode;
+  span_id: string;
+  section: string;
+  filing_date: string | null;
+  filing_url: string | null;
+  text: string;
+  lead_text: string | null;
+  highlights: { start: number; end: number }[];
+  changed: boolean;
+  label: SpanLabel | null;
+}
+
+export interface LabelIn {
+  unit_id: string;
+  sample_id: string;
+  is_entity: string;
+  relations: Relation[];
+  status: string | null;
+  partner_type: string | null;
+  skipped: boolean;
+  note: string | null;
+}
+
+async function post<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      detail = (await res.json()).detail ?? detail;
+    } catch {
+      /* 본문이 JSON이 아니면 상태 문구만 */
+    }
+    throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+  }
+  return res.json() as Promise<T>;
+}
+
+export const reviewApi = {
+  samples: () => get<SampleProgress[]>("/api/review/samples"),
+  sample: (id: string) => get<SampleDetail>(`/api/review/samples/${enc(id)}`),
+  unit: (id: string, ord: number) => get<ReviewUnit>(`/api/review/samples/${enc(id)}/units/${ord}`),
+  save: (label: LabelIn) => post<{ label_id: number; label: SpanLabel }>("/api/review/labels", label),
+};

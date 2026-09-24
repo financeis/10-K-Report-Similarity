@@ -1,17 +1,33 @@
 import { useEffect, useState } from "react";
 
 // 주소: #/node/<node_id>?pair=<pair_key>  (둘 다 인코딩)
+// 검수: #/review, #/review/<sample_id>/<ord>
 export interface Route {
   node: string | null;
   pair: string | null;
+  review: boolean;
+  sample: string | null;
+  ord: number | null;
 }
 
 function parseHash(): Route {
   const hash = window.location.hash.replace(/^#/, "");
   const [path, query = ""] = hash.split("?");
   const m = path.match(/^\/node\/(.+)$/);
+  const r = path.match(/^\/review(?:\/([^/]+)(?:\/(\d+))?)?$/);
   const params = new URLSearchParams(query);
-  return { node: m ? decodeURIComponent(m[1]) : null, pair: params.get("pair") };
+  return {
+    node: m ? decodeURIComponent(m[1]) : null,
+    pair: params.get("pair"),
+    review: !!r,
+    sample: r?.[1] ? decodeURIComponent(r[1]) : null,
+    ord: r?.[2] ? Number(r[2]) : null,
+  };
+}
+
+export function reviewHref(sample?: string, ord?: number): string {
+  if (!sample) return "#/review";
+  return ord == null ? `#/review/${encodeURIComponent(sample)}` : `#/review/${encodeURIComponent(sample)}/${ord}`;
 }
 
 export function href(node: string, pair?: string | null): string {
