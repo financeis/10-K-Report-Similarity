@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from datetime import date
 from pathlib import Path
-from typing import Literal
+from typing import Literal, get_args
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -159,6 +159,15 @@ class SpanConfig(_Strict):
     """후보 쌍 하나의 판정 입력에 넣을 근거 구간 수 (한 회사의 10-K 쪽마다)."""
 
 
+JudgeQuestion = Literal["is_entity", "competitor", "business", "equity"]
+"""예/아니오 판정 질문 (relations/judge/questions.py의 YES_NO_QUESTIONS와 같다)."""
+
+
+class ThresholdConfig(_Strict):
+    accept: float | None = Field(None, ge=0, le=1)
+    reject: float | None = Field(None, ge=0, le=1)
+
+
 class JudgeConfig(_Strict):
     model: str = "jev-1.13.0"
     """판정 모델. 임계값을 맞출 때는 버전을 고정한다 (jev-latest는 가리키는 버전이 바뀐다)."""
@@ -172,11 +181,23 @@ class JudgeConfig(_Strict):
     """점수가 이 값 이상이면 채택."""
     reject: float = Field(0.3, ge=0, le=1)
     """점수가 이 값 미만이면 기각. 그 사이는 불확실(재판정·검수 대상)."""
+    thresholds: dict[JudgeQuestion, ThresholdConfig] = Field(default_factory=dict)
+    """질문별로 다른 임계값. 적지 않은 값은 위의 accept·reject를 쓴다."""
+
+    def threshold(self, question: str) -> tuple[float, float]:
+        """(채택, 기각) 임계값."""
+        t = self.thresholds.get(question) or ThresholdConfig()
+        return (
+            self.accept if t.accept is None else t.accept,
+            self.reject if t.reject is None else t.reject,
+        )
 
     @model_validator(mode="after")
     def _check_thresholds(self) -> JudgeConfig:
-        if self.reject > self.accept:
-            raise ValueError("judge.reject는 judge.accept보다 클 수 없습니다")
+        for q in get_args(JudgeQuestion):
+            accept, reject = self.threshold(q)
+            if reject > accept:
+                raise ValueError(f"judge {q}: reject({reject})가 accept({accept})보다 큽니다")
         return self
 
 

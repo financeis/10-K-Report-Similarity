@@ -200,6 +200,21 @@ def make_judge(cfg: Config, model: str | None = None):
     return JevJudge(model or j.model, j.concurrency)
 
 
+def judge_settings(cfg: Config, model: str | None = None, context: str | None = None) -> dict:
+    """판정 결과를 바꾸는 설정 전부. 확인 표본은 뽑을 때 이것을 고정해 둔다."""
+    from .judge.questions import QUESTION_VERSION, YES_NO_QUESTIONS
+
+    j = relations_config(cfg).judge
+    context = context or j.context
+    return {
+        "model": model or j.model,
+        "question_version": QUESTION_VERSION,
+        "context": context,
+        "context_chars": j.context_chars if context == "nearby" else None,
+        "thresholds": {q: list(j.threshold(q)) for q in YES_NO_QUESTIONS},
+    }
+
+
 def sample_requests(cfg: Config, sample: str, limit: int | None = None, context: str | None = None):
     """표본의 검수 단위 → 판정 요청 (검수 순서대로). context를 비우면 설정값."""
     from . import reviews
@@ -252,26 +267,44 @@ def stage_judge(cfg: Config, sample: str, model: str | None = None, limit: int |
 
 
 def stage_eval(
-    cfg: Config, sample: str, model: str | None = None, judge=None, context: str | None = None
+    cfg: Config,
+    sample: str,
+    model: str | None = None,
+    judge=None,
+    context: str | None = None,
+    force: bool = False,
 ):
-    """표본을 판정(캐시 우선)하고 검수 라벨로 채점한다. 결과는 relations/eval/ 아래에 저장."""
+    """표본을 판정(캐시 우선)하고 검수 라벨로 채점한다. 결과는 relations/eval/ 아래에 저장.
+
+    확인 표본은 뽑을 때 고정한 판정 설정과 지금 설정이 다르면 멈춘다. force로 채점할 수는 있지만,
+    그 결과는 합격 판단에 쓰지 않는다고 보고서에 적는다."""
     from . import reviews
     from .evaluate import disagreements, evaluate, format_report, load_labels, unit_table
-    from .judge.questions import QUESTION_VERSION
+    from .judge.questions import QUESTION_VERSION, YES_NO_QUESTIONS
 
     rel = relations_config(cfg)
     context = context or rel.judge.context
     judge = judge or make_judge(cfg, model)
-    _, run = stage_judge(cfg, sample, judge=judge, context=context)
     rev = reviews.connect(reviews_path(cfg))
     purpose = rev.execute("SELECT purpose FROM samples WHERE sample_id = ?", (sample,)).fetchone()
+    frozen = reviews.frozen_settings(rev, sample)
+    current = judge_settings(cfg, judge.model_id, context)
+    changed = reviews.settings_changes(frozen, current) if frozen else []
+    if changed and not force:
+        raise SystemExit(
+            f"{sample}은 확인 표본이고, 뽑을 때 고정한 판정 설정과 지금 설정이 다릅니다: "
+            f"{', '.join(changed)}. 설정을 되돌리거나 확인 표본을 새로 뽑으세요 "
+            "(--force로 채점할 수는 있지만 합격 판단에는 쓰지 않습니다)"
+        )
     if purpose and purpose[0] == "confirm":
         log.warning(
             "확인 표본입니다. 이 결과를 보고 질문·임계값을 고치면 확인 표본을 새로 뽑아야 합니다"
         )
+    _, run = stage_judge(cfg, sample, judge=judge, context=context)
     labels = load_labels(rev, sample)
     judgements = {j.unit_id: j for j in run.judgements if j is not None}
-    table = unit_table(labels, judgements, rel.judge.accept, rel.judge.reject)
+    thresholds = {q: rel.judge.threshold(q) for q in YES_NO_QUESTIONS}
+    table = unit_table(labels, judgements, rel.judge.accept, rel.judge.reject, thresholds)
     metrics = evaluate(table)
     meta = {
         "created": datetime.now().isoformat(timespec="seconds"),
@@ -283,7 +316,10 @@ def stage_eval(
         "context": context,
         "accept": rel.judge.accept,
         "reject": rel.judge.reject,
+        "thresholds": thresholds,
         "labels": f"reviews.sqlite의 표본 {sample} 라벨 (단위마다 가장 최근 것)",
+        "frozen": frozen is not None,
+        "settings_changed": changed,
     }
     out = cfg.relations_dir / "eval"
     out.mkdir(parents=True, exist_ok=True)

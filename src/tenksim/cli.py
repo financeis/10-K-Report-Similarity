@@ -209,7 +209,7 @@ def cmd_sample(cfg: Config, args) -> None:
     import sqlite3
 
     from .relations import reviews
-    from .relations.stages import graph_path
+    from .relations.stages import graph_path, judge_settings
 
     path = graph_path(cfg)
     if not path.exists():
@@ -229,6 +229,7 @@ def cmd_sample(cfg: Config, args) -> None:
         res = reviews.create_sample(
             rev, graph, sample_id=args.name, purpose=args.purpose, n_companies=args.companies,
             per_company_cap=args.cap, seed=args.seed, config=cfg.name,
+            settings=judge_settings(cfg) if args.purpose == "confirm" else None,
         )  # fmt: skip
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
@@ -243,6 +244,14 @@ def cmd_sample(cfg: Config, args) -> None:
     print(
         f"건당 20초로 잡으면 약 {minutes:.0f}분입니다. `tenksim serve`에서 '표본 검수'로 들어가세요."
     )
+    frozen = reviews.frozen_settings(rev, res.sample_id)
+    if frozen:
+        t = ", ".join(f"{q} {a}/{r}" for q, (a, r) in frozen["thresholds"].items())
+        print(
+            f"확인 표본이라 판정 설정을 고정했습니다: {frozen['model']}, 질문 "
+            f"{frozen['question_version']}, 입력 {frozen['context']}, 채택/기각 {t}. "
+            "검수를 마친 뒤 이 설정 그대로 eval-relations를 한 번 실행합니다."
+        )
 
 
 def cmd_judge(cfg: Config, args) -> None:
@@ -267,7 +276,9 @@ def cmd_judge(cfg: Config, args) -> None:
 def cmd_eval_relations(cfg: Config, args) -> None:
     from .relations.stages import stage_eval
 
-    _, report, path = stage_eval(cfg, args.sample, args.model, context=args.context)
+    _, report, path = stage_eval(
+        cfg, args.sample, args.model, context=args.context, force=args.force
+    )
     print(report)
     log.info("채점 결과: %s (라벨과 어긋난 단위는 같은 폴더의 *_disagreements.csv)", path)
 
@@ -370,6 +381,8 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--model", help="판정 모델 (기본: 설정의 relations.judge.model)")
     p.add_argument("--context", choices=["span", "nearby", "pair"],
                    help="판정 입력 (기본: 설정의 relations.judge.context)")  # fmt: skip
+    p.add_argument("--force", action="store_true",
+                   help="확인 표본의 고정 설정과 달라도 채점 (합격 판단에는 쓰지 않음)")  # fmt: skip
     p = add("serve", "관계도 웹앱 실행 (127.0.0.1)", cmd_serve)
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("--no-browser", action="store_true", help="브라우저를 자동으로 열지 않는다")

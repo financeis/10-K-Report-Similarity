@@ -30,7 +30,7 @@ from tenksim.relations.judge.questions import (
 )
 from tenksim.relations.mentions import find_mentions
 from tenksim.relations.names import AliasFile, build_dictionary
-from tenksim.relations.reviews import RELATIONS
+from tenksim.relations.reviews import LEGACY_RELATIONS, RELATIONS
 
 
 def labels_frame(rows):
@@ -74,7 +74,9 @@ JUDGED = {
 
 def test_label_groups_cover_every_review_code_once():
     codes = [c for group in LABEL_GROUPS.values() for c in group]
-    assert sorted(codes) == sorted(RELATIONS) and set(LABEL_GROUPS) == set(RELATION_QUESTIONS)
+    assert sorted(codes) == sorted(set(RELATIONS) | set(LEGACY_RELATIONS))  # v2 + v1 코드
+    assert len(codes) == len(set(codes)) and set(LABEL_GROUPS) == set(RELATION_QUESTIONS)
+    assert set(RELATIONS) == set(RELATION_QUESTIONS)  # v2 라벨은 판정 관계와 같다
 
 
 def test_metrics_combine_entity_gate_and_merge_pairs():
@@ -143,7 +145,7 @@ def test_sample_to_report_end_to_end(tmp_path):
     assert not labels["labeled"].any()
     for unit in labels["unit_id"][:3]:
         reviews.record_label(rev, graph, unit=unit, sample_id="dev1", is_entity="yes",
-                             relations=["competitor"], status="current")  # fmt: skip
+                             relations=["competitor"])  # fmt: skip
     labels = load_labels(rev, "dev1")
     assert labels["labeled"].sum() == 3 and labels["relations"].iloc[0] == ["competitor"]
 
@@ -165,3 +167,35 @@ def test_load_labels_rejects_unknown_sample(tmp_path):
     rev = reviews.connect(tmp_path / "reviews.sqlite")
     with pytest.raises(ValueError, match="표본"):
         load_labels(rev, "nope")
+
+
+def test_per_question_thresholds_and_sweep_suggestion():
+    t = unit_table(labels_frame(ROWS), JUDGED, 0.8, 0.3, per_question={"business": (0.4, 0.3)})
+    assert t.set_index("unit_id").at["u4", "p_business"] == "yes"  # 0.5 ≥ 0.4
+    sweep = evaluate(t)["sweep"]["business"]
+    at = {x["at"]: x for x in sweep["combined"]}
+    assert at[0.5]["pair_recall"] == 1.0 and at[0.5]["unit_recall"] == 1.0
+    assert at[0.6]["unit_recall"] == 0.5  # u4(0.5)가 빠진다
+    assert sweep["suggest_accept"] == 0.5  # 쌍·문장 정밀도를 지키면서 재현율이 가장 높은 값
+
+
+def test_judge_config_thresholds_fall_back_and_validate():
+    from typing import get_args
+
+    from pydantic import ValidationError
+
+    from tenksim.config import JudgeConfig, JudgeQuestion
+
+    j = JudgeConfig(thresholds={"competitor": {"accept": 0.7}})
+    assert j.threshold("competitor") == (0.7, 0.3) and j.threshold("business") == (0.8, 0.3)
+    assert set(get_args(JudgeQuestion)) == set(YES_NO_QUESTIONS)
+    with pytest.raises(ValidationError, match="business"):
+        JudgeConfig(thresholds={"business": {"reject": 0.9}})
+
+
+def test_confirm_report_hides_threshold_suggestions():
+    m = evaluate(unit_table(labels_frame(ROWS), JUDGED, 0.8, 0.3))
+    meta = {"sample": "c", "model": "fake", "question_version": "v", "labels": "t",
+            "accept": 0.8, "reject": 0.3}  # fmt: skip
+    assert "## 임계값별" in format_report(m, {**meta, "purpose": "dev"})
+    assert "## 임계값별" not in format_report(m, {**meta, "purpose": "confirm"})

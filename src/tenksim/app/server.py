@@ -30,8 +30,6 @@ class LabelIn(BaseModel):
     sample_id: str | None = None
     is_entity: str = "yes"
     relations: list[str] = Field(default_factory=list)
-    status: str | None = None
-    partner_type: str | None = None
     skipped: bool = False
     note: str | None = None
 
@@ -347,8 +345,7 @@ def create_app(graph_db: Path, reviews_db: Path | None = None) -> FastAPI:
             try:
                 label_id = reviews_mod.record_label(
                     r, g, unit=body.unit_id, sample_id=body.sample_id, is_entity=body.is_entity,
-                    relations=body.relations, status=body.status, partner_type=body.partner_type,
-                    skipped=body.skipped, note=body.note, blind=True,
+                    relations=body.relations, skipped=body.skipped, note=body.note, blind=True,
                 )  # fmt: skip
             except reviews_mod.LabelError as exc:
                 raise HTTPException(422, str(exc)) from exc

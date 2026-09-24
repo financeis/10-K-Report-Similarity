@@ -21,9 +21,12 @@ from pathlib import Path
 
 from .mentions import text_hash
 
-REVIEWS_SCHEMA_VERSION = 1
+REVIEWS_SCHEMA_VERSION = 2
+"""v2 (2026-09-25): 관계를 경쟁 · 공급·협력 · 지분 세 가지로 줄이고, 시점과 협력 유형을 묻지 않는다."""
 
-RELATIONS = (
+RELATIONS = ("competitor", "business", "equity")
+"""검수자가 고르는 관계 (방향 없음). 여러 개를 함께 고를 수 있다. 없으면 '관계를 말하지 않음'."""
+LEGACY_RELATIONS = (
     "competitor",
     "doc_supplies_target",
     "target_supplies_doc",
@@ -31,10 +34,10 @@ RELATIONS = (
     "doc_owns_target",
     "target_owns_doc",
 )
-"""검수자가 고르는 관계. 여러 개를 함께 고를 수 있다. 아무것도 없으면 '관계를 말하지 않음'."""
+"""v1 라벨(dev1)의 관계 코드. 읽기만 한다 (evaluate.LABEL_GROUPS가 v2 코드로 묶는다)."""
 ENTITY = ("yes", "no", "unsure")
 STATUS = ("current", "historical", "planned", "unclear")
-PARTNER_TYPES = ("licensing", "distribution", "joint_venture", "co_development", "other")
+"""판정 모델이 답하는 시점. v1 라벨에만 들어 있다."""
 PURPOSES = ("dev", "confirm")
 
 SCHEMA = """
@@ -79,9 +82,9 @@ CREATE TABLE IF NOT EXISTS span_labels (
     span_text TEXT NOT NULL,           -- 검수 당시 원문 (도입문 포함)
     span_hash TEXT NOT NULL,
     is_entity TEXT NOT NULL,           -- yes / no / unsure: 이 이름이 그 회사를 가리키나
-    relations TEXT NOT NULL,           -- JSON 배열. [] = 관계를 말하지 않음
-    partner_type TEXT,
-    status TEXT,                       -- current / historical / planned / unclear
+    relations TEXT NOT NULL,           -- JSON 배열. [] = 관계를 말하지 않음. 코드는 schema_version별
+    partner_type TEXT,                 -- v1 라벨만 (v2부터 묻지 않음)
+    status TEXT,                       -- v1 라벨만: current / historical / planned / unclear
     skipped INTEGER NOT NULL DEFAULT 0,  -- 판단 보류
     note TEXT,
     blind INTEGER NOT NULL,            -- 모델 판정을 가린 채 검수했는가
@@ -89,6 +92,11 @@ CREATE TABLE IF NOT EXISTS span_labels (
     schema_version INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS span_labels_unit ON span_labels(unit_id, label_id);
+CREATE TABLE IF NOT EXISTS sample_settings (
+    sample_id TEXT PRIMARY KEY REFERENCES samples(sample_id),
+    settings TEXT NOT NULL,            -- 확인 표본을 뽑을 때 고정한 판정 설정 (JSON)
+    settings_hash TEXT NOT NULL
+);
 """
 
 
@@ -128,12 +136,18 @@ def create_sample(
     per_company_cap: int = 40,
     seed: int = 0,
     config: str = "",
+    settings: dict | None = None,
 ) -> SampleResult:
     """섹터별로 번갈아 회사를 뽑고, 그 회사가 들어간 검수 단위를 모은다.
 
+    settings: 확인 표본이면 판정 설정(모델, 질문 버전, 입력 방식, 임계값)을 함께 고정해 둔다.
+    채점할 때 설정이 달라졌으면 멈춘다 (확인 표본은 고정한 설정으로 한 번만 쓴다).
+
     - 이미 다른 표본에 들어간 회사는 다시 뽑지 않는다(회사 단위 분리).
-    - 이미 다른 표본에 들어간 단위와, 다른 표본 회사의 10-K에서 나온 단위는 넣지 않는다.
-      같은 10-K 문장이 개발 표본과 확인 표본에 함께 들어가지 않게 하려는 것이다.
+    - 이미 다른 표본에 한 단위라도 들어간 10-K(accession)의 단위는 넣지 않는다. 같은 10-K의 문장이
+      개발 표본과 확인 표본에 함께 들어가지 않게 하려는 것이다. 같은 문장에 다른 회사가 함께
+      나오면(경쟁사 목록 등) 대상 회사만 바꾼 거의 같은 문제가 두 표본에 들어가기 때문이다.
+      다른 표본 회사의 10-K도 같은 이유로 넣지 않는다.
     - 많이 언급되는 회사(Microsoft 등)는 회사당 per_company_cap개까지만 무작위로 뽑는다.
     """
     if purpose not in PURPOSES:
@@ -143,7 +157,7 @@ def create_sample(
     rng = random.Random(seed)
 
     used_companies = {r[0] for r in reviews.execute("SELECT node_id FROM sample_companies")}
-    used_units = {r[0] for r in reviews.execute("SELECT unit_id FROM sample_units")}
+    used_filings = {_accession(r[0]) for r in reviews.execute("SELECT span_id FROM sample_units")}
 
     units_by_company: dict[str, list[dict]] = defaultdict(list)
     for r in graph.execute(
@@ -156,7 +170,7 @@ def create_sample(
     ):
         u = dict(r)
         u["unit_id"] = unit_id(u["span_id"], u["target_node"])
-        if u["unit_id"] in used_units or u["doc_node"] in used_companies:
+        if _accession(u["span_id"]) in used_filings or u["doc_node"] in used_companies:
             continue
         units_by_company[u["doc_node"]].append(u)
         units_by_company[u["target_node"]].append(u)
@@ -213,12 +227,46 @@ def create_sample(
                 for i, u in enumerate(ordered)
             ],
         )  # fmt: skip
+        if settings is not None:
+            raw = _settings_json(settings)
+            reviews.execute(
+                "INSERT INTO sample_settings VALUES (?, ?, ?)", (sample_id, raw, text_hash(raw))
+            )
     return SampleResult(sample_id, companies, len(ordered))
+
+
+def _settings_json(settings: dict) -> str:
+    return json.dumps(settings, sort_keys=True, ensure_ascii=False)
+
+
+def frozen_settings(reviews: sqlite3.Connection, sample_id: str) -> dict | None:
+    """표본을 뽑을 때 고정한 판정 설정. 고정하지 않은 표본(개발 표본)은 None."""
+    r = reviews.execute(
+        "SELECT settings FROM sample_settings WHERE sample_id = ?", (sample_id,)
+    ).fetchone()
+    return json.loads(r[0]) if r else None
+
+
+def settings_changes(frozen: dict, current: dict) -> list[str]:
+    """고정한 설정과 지금 설정이 다른 항목 ('thresholds.business'처럼 점으로 이어 적는다)."""
+    out = []
+    for key in sorted(set(frozen) | set(current)):
+        a, b = frozen.get(key), current.get(key)
+        if isinstance(a, dict) and isinstance(b, dict):
+            out += [f"{key}.{k}" for k in settings_changes(a, b)]
+        elif json.dumps(a, sort_keys=True) != json.dumps(b, sort_keys=True):
+            out.append(key)
+    return out
 
 
 def _pair(u: dict) -> str:
     a, b = sorted((u["doc_node"], u["target_node"]))
     return f"{a}|{b}"
+
+
+def _accession(span_id: str) -> str:
+    # s:<accession>:<section>:<start>-<end>
+    return span_id.split(":")[1]
 
 
 def _pos(span_id: str) -> tuple[str, int]:
@@ -238,13 +286,7 @@ class LabelError(ValueError):
     pass
 
 
-def validate_label(
-    is_entity: str,
-    relations: list[str],
-    status: str | None,
-    partner_type: str | None,
-    skipped: bool,
-) -> None:
+def validate_label(is_entity: str, relations: list[str], skipped: bool) -> None:
     if skipped:
         return
     if is_entity not in ENTITY:
@@ -256,12 +298,6 @@ def validate_label(
         raise LabelError("같은 관계를 두 번 골랐습니다")
     if is_entity != "yes" and relations:
         raise LabelError("같은 회사가 아니면 관계를 고를 수 없습니다")
-    if relations and status not in STATUS:
-        raise LabelError(f"관계를 골랐으면 시점({STATUS})도 골라야 합니다")
-    if partner_type is not None and (
-        "partner" not in relations or partner_type not in PARTNER_TYPES
-    ):
-        raise LabelError("협력 유형은 협력을 골랐을 때만, 정해진 값으로 적습니다")
 
 
 def record_label(
@@ -272,13 +308,11 @@ def record_label(
     sample_id: str | None,
     is_entity: str,
     relations: list[str],
-    status: str | None = None,
-    partner_type: str | None = None,
     skipped: bool = False,
     note: str | None = None,
     blind: bool = True,
 ) -> int:
-    validate_label(is_entity, relations, status, partner_type, skipped)
+    validate_label(is_entity, relations, skipped)
     span_id, target = unit.rsplit("|", 1)
     span = graph.execute(
         "SELECT doc_node, accession, section, text, lead_text FROM spans WHERE span_id = ?",
@@ -297,9 +331,8 @@ def record_label(
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (unit, sample_id, span_id, span[0], target, span[1], span[2], full, text_hash(full),
-             is_entity, json.dumps(ordered), partner_type if "partner" in ordered else None,
-             status if ordered else None, int(skipped), note or None, int(blind), _now(),
-             REVIEWS_SCHEMA_VERSION),
+             is_entity, json.dumps(ordered), None, None, int(skipped), note or None, int(blind),
+             _now(), REVIEWS_SCHEMA_VERSION),
         )  # fmt: skip
     return int(cur.lastrowid)
 

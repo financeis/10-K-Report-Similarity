@@ -721,12 +721,6 @@ fieldset.q legend {
 .opts.col {
   flex-direction: column;
 }
-.opts.sub {
-  align-items: center;
-  margin-top: 10px;
-  padding-top: 8px;
-  border-top: 1px dashed var(--line);
-}
 .choice {
   display: flex;
   align-items: flex-start;
@@ -828,19 +822,5 @@ kbd {
   }
   .nav a {
     padding: 5px 6px;
-  }
-}
-
-/* 관계 보기는 두 줄로: 경쟁·협력 / 공급 두 방향 / 지분 두 방향, 마지막 '관계 없음'은 한 줄 전체 */
-.opts.col {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-}
-.opts.col .choice:last-child {
-  grid-column: 1 / -1;
-}
-@media (max-width: 700px) {
-  .opts.col {
-    grid-template-columns: 1fr;
   }
 }

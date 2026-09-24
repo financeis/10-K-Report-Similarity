@@ -136,37 +136,36 @@ type Entity = "yes" | "no" | "unsure";
 interface Draft {
   isEntity: Entity | null;
   relations: Relation[] | null; // null = 아직 안 고름, [] = 관계를 말하지 않음
-  status: string | null;
-  partnerType: string | null;
   note: string;
 }
 
-const STATUS: [string, string, string][] = [
-  ["current", "현재", "C"],
-  ["historical", "과거·종료", "H"],
-  ["planned", "계획·발표만", "P"],
-  ["unclear", "알 수 없음", "X"],
-];
-
-const PARTNER_TYPES: [string, string][] = [
-  ["licensing", "라이선스"],
-  ["distribution", "유통·재판매"],
-  ["joint_venture", "합작(JV)"],
-  ["co_development", "공동 개발"],
-  ["other", "기타 제휴"],
-];
-
+// 방향과 세부 유형은 묻지 않는다 (계획서 5장, 2026-09-25 결정)
 function relationOptions(x: ReviewNode, y: ReviewNode): [Relation, string, string][] {
   const X = x.ticker ?? x.name;
   const Y = y.ticker ?? y.name;
   return [
     ["competitor", "경쟁", `${X}와 ${Y}가 경쟁한다 (경쟁사 목록 포함)`],
-    ["doc_supplies_target", `${X} → ${Y} 공급`, `${X}가 ${Y}에 제품·서비스를 판매·제공하거나 대신 만들어 준다 (${Y}가 ${X}의 고객)`],
-    ["target_supplies_doc", `${Y} → ${X} 공급`, `${Y}가 ${X}에 제품·서비스를 판매·제공하거나 대신 만들어 준다 (${Y}가 ${X}의 공급사)`],
-    ["partner", "협력", "라이선스, 유통·재판매, 합작, 공동 개발 등 제휴"],
-    ["doc_owns_target", `${X}가 ${Y} 지분 보유`, `${X}가 ${Y}의 주식·지분을 가지고 있다`],
-    ["target_owns_doc", `${Y}가 ${X} 지분 보유`, `${Y}가 ${X}의 주식·지분을 가지고 있다`],
+    [
+      "business",
+      "공급·협력",
+      "한쪽이 다른 쪽에 제품·서비스를 팔거나 제공한다(고객·공급사·임대·금융 포함), 또는 제휴·합작·라이선스·유통. 방향은 따지지 않음",
+    ],
+    ["equity", "지분", "한쪽이 다른 쪽의 주식·지분을 가지고 있거나 가졌다(모회사·분사 포함). 방향은 따지지 않음"],
   ];
+}
+
+// v1 라벨(dev1)의 방향 있는 코드를 지금 선택지로 바꿔 보여준다
+const LEGACY: Record<string, Relation> = {
+  competitor: "competitor",
+  doc_supplies_target: "business",
+  target_supplies_doc: "business",
+  partner: "business",
+  doc_owns_target: "equity",
+  target_owns_doc: "equity",
+};
+
+function currentRelations(codes: string[]): Relation[] {
+  return [...new Set(codes.map((c) => LEGACY[c] ?? (c as Relation)))];
 }
 
 function UnitReview({
@@ -181,13 +180,7 @@ function UnitReview({
   onSaved: () => void;
 }) {
   const unit = useFetch(`unit:${sampleId}:${ord}`, () => reviewApi.unit(sampleId, ord));
-  const [draft, setDraft] = useState<Draft>({
-    isEntity: null,
-    relations: null,
-    status: null,
-    partnerType: null,
-    note: "",
-  });
+  const [draft, setDraft] = useState<Draft>({ isEntity: null, relations: null, note: "" });
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [showContext, setShowContext] = useState(false);
@@ -200,14 +193,8 @@ function UnitReview({
     const anonymous = u.target.kind === "anonymous";
     setDraft(
       l && !l.skipped
-        ? {
-            isEntity: l.is_entity,
-            relations: l.relations,
-            status: l.status,
-            partnerType: l.partner_type,
-            note: l.note ?? "",
-          }
-        : { isEntity: anonymous ? "yes" : null, relations: null, status: null, partnerType: null, note: l?.note ?? "" },
+        ? { isEntity: l.is_entity, relations: currentRelations(l.relations), note: l.note ?? "" }
+        : { isEntity: anonymous ? "yes" : null, relations: null, note: l?.note ?? "" },
     );
   }, [unit.data]);
 
@@ -226,7 +213,6 @@ function UnitReview({
         if (!draft.isEntity) return setError("먼저 이 이름이 그 회사가 맞는지 골라 주세요.");
         if (draft.isEntity === "yes" && draft.relations === null)
           return setError("관계를 고르거나, '관계를 말하지 않음'을 골라 주세요.");
-        if (draft.relations?.length && !draft.status) return setError("관계의 시점을 골라 주세요.");
       }
       setSaving(true);
       setError(null);
@@ -237,8 +223,6 @@ function UnitReview({
           sample_id: sampleId,
           is_entity: skipped ? (draft.isEntity ?? "unsure") : draft.isEntity!,
           relations: skipped ? [] : rels,
-          status: !skipped && rels.length ? draft.status : null,
-          partner_type: !skipped && rels.includes("partner") ? draft.partnerType : null,
           skipped,
           note: draft.note.trim() || null,
         });
@@ -262,7 +246,7 @@ function UnitReview({
     });
   }, []);
 
-  // 키보드: Y/N/U 회사 확인, 1~6 관계, 0 관계 없음, C/H/P/X 시점, Enter 저장, S 보류, ←/→ 이동
+  // 키보드: Y/N/U 회사 확인, 1~3 관계, 0 관계 없음, Enter 저장, S 보류, ←/→ 이동
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement;
@@ -273,12 +257,10 @@ function UnitReview({
       const k = e.key.toLowerCase();
       const opts = relationOptions(u.doc, u.target);
       if (k === "y") setDraft((d) => ({ ...d, isEntity: "yes" }));
-      else if (k === "n") setDraft((d) => ({ ...d, isEntity: "no", relations: [], status: null }));
-      else if (k === "u") setDraft((d) => ({ ...d, isEntity: "unsure", relations: [], status: null }));
-      else if (k >= "1" && k <= "6") toggle(opts[Number(k) - 1][0]);
-      else if (k === "0") setDraft((d) => ({ ...d, isEntity: d.isEntity ?? "yes", relations: [], status: null }));
-      else if (k === "c" || k === "h" || k === "p" || k === "x")
-        setDraft((d) => ({ ...d, status: STATUS.find((s) => s[2].toLowerCase() === k)![0] }));
+      else if (k === "n") setDraft((d) => ({ ...d, isEntity: "no", relations: [] }));
+      else if (k === "u") setDraft((d) => ({ ...d, isEntity: "unsure", relations: [] }));
+      else if (k >= "1" && k <= String(opts.length)) toggle(opts[Number(k) - 1][0]);
+      else if (k === "0") setDraft((d) => ({ ...d, isEntity: d.isEntity ?? "yes", relations: [] }));
       else if (k === "enter") save(false);
       else if (k === "s") save(true);
       else if (k === "arrowleft") go(ord - 1);
@@ -298,7 +280,6 @@ function UnitReview({
   const anonymous = Y.kind === "anonymous";
   const opts = relationOptions(X, Y);
   const entityOk = draft.isEntity === "yes";
-  const hasRelation = !!draft.relations?.length;
   const matched = u.highlights.map((h) => u.text.slice(h.start, h.end));
 
   return (
@@ -359,14 +340,14 @@ function UnitReview({
             <Choice
               on={draft.isEntity === "no"}
               k="N"
-              onClick={() => setDraft((d) => ({ ...d, isEntity: "no", relations: [], status: null }))}
+              onClick={() => setDraft((d) => ({ ...d, isEntity: "no", relations: [] }))}
             >
               아님 (다른 회사, 지명, 제품명 등)
             </Choice>
             <Choice
               on={draft.isEntity === "unsure"}
               k="U"
-              onClick={() => setDraft((d) => ({ ...d, isEntity: "unsure", relations: [], status: null }))}
+              onClick={() => setDraft((d) => ({ ...d, isEntity: "unsure", relations: [] }))}
             >
               모르겠음
             </Choice>
@@ -388,36 +369,11 @@ function UnitReview({
           <Choice
             on={draft.relations !== null && draft.relations.length === 0}
             k="0"
-            onClick={() => setDraft((d) => ({ ...d, relations: [], status: null }))}
-            hint="이름만 나열, 임원 경력, 업계 일반 설명 등. 끝난 관계라면 관계를 고르고 시점을 과거로"
+            onClick={() => setDraft((d) => ({ ...d, relations: [] }))}
+            hint="이름만 나열, 임원 경력, 업계 일반 설명 등. 이미 끝난 관계도 관계로 고릅니다"
           >
             관계를 말하지 않음
           </Choice>
-        </div>
-        {draft.relations?.includes("partner") && (
-          <div className="opts sub">
-            <span className="small muted">협력 유형 (선택)</span>
-            {PARTNER_TYPES.map(([code, label]) => (
-              <Choice
-                key={code}
-                on={draft.partnerType === code}
-                onClick={() => setDraft((d) => ({ ...d, partnerType: d.partnerType === code ? null : code }))}
-              >
-                {label}
-              </Choice>
-            ))}
-          </div>
-        )}
-      </fieldset>
-
-      <fieldset className="q" disabled={!entityOk || !hasRelation}>
-        <legend>{anonymous ? "2" : "3"}. 그 관계는 공시 시점에 어떤 상태인가요?</legend>
-        <div className="opts">
-          {STATUS.map(([code, label, key]) => (
-            <Choice key={code} on={draft.status === code} k={key} onClick={() => setDraft((d) => ({ ...d, status: code }))}>
-              {label}
-            </Choice>
-          ))}
         </div>
       </fieldset>
 
@@ -439,7 +395,7 @@ function UnitReview({
         <button className="btn" onClick={() => save(true)} disabled={saving}>
           보류 <kbd>S</kbd>
         </button>
-        <span className="small muted">←/→ 이동 · 1~6 관계 · 0 관계 없음 · C/H/P/X 시점</span>
+        <span className="small muted">←/→ 이동 · 1~3 관계 · 0 관계 없음</span>
       </div>
       {showContext && <ContextModal spanId={u.span_id} onClose={() => setShowContext(false)} />}
     </section>

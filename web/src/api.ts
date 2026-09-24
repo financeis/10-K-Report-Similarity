@@ -198,19 +198,12 @@ export interface SampleDetail {
   nodes: Record<string, ReviewNode>;
 }
 
-export type Relation =
-  | "competitor"
-  | "doc_supplies_target"
-  | "target_supplies_doc"
-  | "partner"
-  | "doc_owns_target"
-  | "target_owns_doc";
+// 검수 라벨 v2: 방향·세부 유형 없이 세 가지 (계획서 5장)
+export type Relation = "competitor" | "business" | "equity";
 
 export interface SpanLabel {
   is_entity: "yes" | "no" | "unsure";
-  relations: Relation[];
-  status: string | null;
-  partner_type: string | null;
+  relations: string[]; // v1 라벨(dev1)에는 방향이 있는 옛 코드가 들어 있다
   skipped: number;
   note: string | null;
   labeled_at: string;
@@ -239,8 +232,6 @@ export interface LabelIn {
   sample_id: string;
   is_entity: string;
   relations: Relation[];
-  status: string | null;
-  partner_type: string | null;
   skipped: boolean;
   note: string | null;
 }

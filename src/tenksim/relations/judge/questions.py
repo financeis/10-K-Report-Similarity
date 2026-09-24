@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from . import JudgeRequest
 
-QUESTION_VERSION = "v3.0"
+QUESTION_VERSION = "v3.1"
 
 MARK_OPEN, MARK_CLOSE = "[[", "]]"
 
@@ -73,8 +73,9 @@ def questions_for(req: JudgeRequest) -> dict[str, dict]:
             true=f"The marked name means {y} itself, or a subsidiary, division or brand of {y}.",
             false=(
                 "The marked name means something else: a person, a place or venue, a stock index "
-                "or exchange, a product of another company, or a different company with a "
-                "similar name."
+                "or exchange, a product of another company, a separately owned company that only "
+                "shares part of the name (for example an independent bottler, franchisee or joint "
+                "venture company), or a different company with a similar name."
             ),
         ),
         "competitor": _noul(
@@ -91,7 +92,8 @@ def questions_for(req: JudgeRequest) -> dict[str, dict]:
             ),
             false=(
                 f"The passage does not show any business dealings between {x} and {y}. Being "
-                "competitors, or one owning shares of the other, does not count by itself."
+                "competitors, one owning shares of the other, or a one-time purchase or sale of "
+                "assets (or an option to buy them) does not count by itself."
             ),
         ),
         "equity": _noul(
