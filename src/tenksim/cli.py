@@ -8,6 +8,7 @@ import sys
 import textwrap
 
 import numpy as np
+import pandas as pd
 from dotenv import find_dotenv, load_dotenv
 
 from . import pipeline
@@ -151,6 +152,47 @@ def _print_mentions(tables, ticker: str, show_excluded: bool) -> None:
                 print(textwrap.indent(snippet, f"    {r.section[:4]}{flag} | "))
 
 
+def cmd_candidates(cfg: Config, args) -> None:
+    from .relations.stages import load_candidates, load_mentions, stage_candidates
+
+    cands = load_candidates(cfg) if args.cached else stage_candidates(cfg)
+    if args.ticker:
+        _print_candidates(cands, load_mentions(cfg), args.ticker, args.spans)
+
+
+def _print_candidates(cands, tables, ticker: str, show_spans: bool) -> None:
+    nodes = tables.nodes.set_index("node_id")
+    match = nodes.index[nodes["ticker"].fillna("").str.upper() == ticker.upper()]
+    if not len(match):
+        raise SystemExit(f"{ticker}: 기업 목록에 없습니다")
+    node = match[0]
+    c = cands.candidates
+    c = c[(c["node_a"] == node) | (c["node_b"] == node)].copy()
+    a_side = c["node_a"] == node
+    c["other"] = c["node_b"].where(a_side, c["node_a"])
+    c["rank"] = c["rank_ab"].where(a_side, c["rank_ba"])  # 이 회사 기준 상대의 유사도 순위
+    c["mentions_out"] = c["mentions_ab"].where(a_side, c["mentions_ba"])
+    c["mentions_in"] = c["mentions_ba"].where(a_side, c["mentions_ab"])
+    c = c.sort_values(["rank", "other"], na_position="last")
+    label = nodes["name"].to_dict()
+    span_text = tables.spans.set_index("span_id")["text"]
+    print(f"{ticker.upper()} 후보 {len(c)}쌍 ({c['source'].value_counts().to_dict()})")
+    print(f"{'상대':<40} {'출처':<10} {'순위':>4} {'언급(나→상대/상대→나)':>12} 구간")
+    for r in c.itertuples():
+        rank = "-" if pd.isna(r.rank) else str(int(r.rank))
+        mentions = f"{r.mentions_out}/{r.mentions_in}"
+        print(
+            f"{label.get(r.other, r.other)[:40]:<40} {r.source:<10} {rank:>4} {mentions:>12} {r.n_spans}"
+        )
+        if show_spans:
+            for s in cands.candidate_spans[
+                cands.candidate_spans["pair_key"] == r.pair_key
+            ].itertuples():
+                who = "나" if s.doc_node == node else "상대"
+                snippet = textwrap.shorten(span_text[s.span_id], 200, placeholder=" ...")
+                print(f"    [{who} 10-K · {s.cues or '-'}] {snippet}")
+
+
 def main(argv: list[str] | None = None) -> None:
     # 설치 위치가 아니라 명령을 실행한 폴더에서 .env를 찾는다
     load_dotenv(find_dotenv(usecwd=True))
@@ -190,6 +232,12 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--ticker", help="이 회사의 언급을 출력")
     p.add_argument("--all", action="store_true", help="제외된 언급(임원 약력 등)도 출력")
     p.add_argument("--cached", action="store_true", help="다시 찾지 않고 저장된 결과만 출력")
+    p = add(
+        "candidates", "관계도: 판정할 후보 쌍 만들기 (유사도 상위 K ∪ 이름 언급)", cmd_candidates
+    )
+    p.add_argument("--ticker", help="이 회사의 후보를 출력")
+    p.add_argument("--spans", action="store_true", help="후보마다 판정에 넣을 근거 구간도 출력")
+    p.add_argument("--cached", action="store_true", help="다시 만들지 않고 저장된 결과만 출력")
 
     args = parser.parse_args(argv)
     _setup_logging(args.verbose)

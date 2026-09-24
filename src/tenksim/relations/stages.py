@@ -9,7 +9,8 @@ from datetime import datetime
 import pandas as pd
 
 from ..config import Config, RelationsConfig
-from ..pipeline import load_documents, load_universe
+from ..pipeline import load_documents, load_universe, similarity_for
+from .candidates import Candidates, build_candidates
 from .mentions import MentionTables, find_mentions, text_hash
 from .names import build_dictionary, load_aliases
 
@@ -74,3 +75,53 @@ def load_mentions(cfg: Config) -> MentionTables:
     if missing:
         raise SystemExit(f"{d}에 {missing}가 없습니다. 먼저 `tenksim mentions`를 실행하세요")
     return MentionTables(*(pd.read_parquet(d / f"{n}.parquet") for n in MENTION_FILES))
+
+
+def stage_candidates(cfg: Config, tables: MentionTables | None = None) -> Candidates:
+    """유사도 상위 K ∪ 이름 언급 → 후보 쌍(pending)과 쌍별 판정 입력 근거 구간."""
+    rel = relations_config(cfg)
+    tables = tables if tables is not None else load_mentions(cfg)
+    companies, sim = similarity_for(cfg, rel.similarity) if rel.similarity else (None, None)
+    cands = build_candidates(
+        tables, companies, sim, top_k=rel.top_k, max_per_side=rel.spans.max_per_side
+    )
+    out = cfg.relations_dir
+    cands.candidates.to_parquet(out / "candidates.parquet", index=False)
+    cands.candidate_spans.to_parquet(out / "candidate_spans.parquet", index=False)
+
+    c = cands.candidates
+    both_company = c["rank_ab"].notna()
+    by_k = {}
+    if sim is not None:
+        mention = c["source"] != "similarity"
+        best = c[["rank_ab", "rank_ba"]].min(axis=1)
+        for k in sorted({10, 20, 30, rel.top_k}):
+            by_k[k] = int((mention | (both_company & (best <= k))).sum())
+            if k > rel.top_k:
+                by_k[k] = None  # 후보를 top_k로 만들었으므로 더 큰 K는 셀 수 없다
+    meta = {
+        "created": datetime.now().isoformat(timespec="seconds"),
+        "similarity": rel.similarity,
+        "top_k": rel.top_k,
+        "n_candidates": int(len(c)),
+        "by_source": {k: int(v) for k, v in c["source"].value_counts().items()},
+        "n_with_external_or_anonymous": int((~both_company).sum()),
+        "n_candidates_by_k": by_k,
+        "n_candidate_spans": int(len(cands.candidate_spans)),
+    }
+    (out / "candidates_meta.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False))
+    log.info(
+        "Candidates: %d pairs %s; %d involve external/anonymous nodes; %d evidence spans",
+        meta["n_candidates"], meta["by_source"], meta["n_with_external_or_anonymous"],
+        meta["n_candidate_spans"],
+    )  # fmt: skip
+    return cands
+
+
+def load_candidates(cfg: Config) -> Candidates:
+    d = cfg.relations_dir
+    if not (d / "candidates.parquet").exists():
+        raise SystemExit(f"{d}에 후보가 없습니다. 먼저 `tenksim candidates`를 실행하세요")
+    return Candidates(
+        pd.read_parquet(d / "candidates.parquet"), pd.read_parquet(d / "candidate_spans.parquet")
+    )

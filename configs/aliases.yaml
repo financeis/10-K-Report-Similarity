@@ -168,7 +168,7 @@ exclude_contexts:
     pattern: '\brat(?:ing|ings|ed)\b|downgrad|upgrad|investment[- ]grade|credit outlook'
   - reason: other_meaning
     tickers: [UPS]
-    pattern: 'uninterruptible|power suppl|UPS (?:systems?|units?|products?)'
+    pattern: 'uninterruptible|power suppl|(?:single|three)[- ]phase UPS|modular UPS|UPS (?:systems?|units?|products?|solutions?)'
   - reason: other_company
     tickers: [MRK]
     pattern: 'Merck KGaA|EMD Serono'

@@ -155,6 +155,8 @@ class SpanConfig(_Strict):
     """목록 도입문("Our competitors include:")이나 대명사가 가리키는 앞 문장을 근거 구간에 넣는다."""
     max_chars: int = 1500
     """근거 구간 하나의 최대 글자 수. 넘으면 언급 주변만 자른다."""
+    max_per_side: int = 6
+    """후보 쌍 하나의 판정 입력에 넣을 근거 구간 수 (한 회사의 10-K 쪽마다)."""
 
 
 class RelationsConfig(_Strict):
