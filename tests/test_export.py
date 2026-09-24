@@ -43,12 +43,12 @@ DOCS = pd.DataFrame(
 )
 
 
-def export(path):
+def export(path, relations=None):
     tables = find_mentions(DOCS, build_dictionary(UNIVERSE, ALIASES))
     cands = build_candidates(tables, None, None, top_k=1, max_per_side=6)
     return export_graph(
         path, tables=tables, candidates=cands, universe=UNIVERSE, documents=DOCS,
-        meta={"config": "t"},
+        meta={"config": "t"}, relations=relations,
     )  # fmt: skip
 
 

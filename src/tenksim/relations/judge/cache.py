@@ -61,7 +61,9 @@ def judge_cached(
     requests: Sequence[JudgeRequest],
     cache: sqlite3.Connection,
     question_version: str = QUESTION_VERSION,
+    ask: bool = True,
 ) -> JudgeRun:
+    """ask=False면 캐시에 있는 것만 꺼낸다 (모델을 부르지 않음, 없는 것은 None·n_failed)."""
     keys = [input_hash(judge.payload(r)) for r in requests]
     found: dict[str, tuple] = {}
     for key in set(keys):
@@ -78,7 +80,12 @@ def judge_cached(
     for key, req in zip(keys, requests, strict=True):
         if key not in found:
             todo.setdefault(key, req)
-    fresh = judge.judge(list(todo.values())) if todo else []
+    if not todo:
+        fresh = []
+    elif ask:
+        fresh = judge.judge(list(todo.values()))
+    else:
+        fresh = [None] * len(todo)
     now = datetime.now().isoformat(timespec="seconds")
     new: dict[str, Judgement] = {}
     with cache:

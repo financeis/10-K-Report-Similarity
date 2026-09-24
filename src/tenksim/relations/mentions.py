@@ -224,7 +224,10 @@ def find_mentions(
             if any(a <= start < b for a, b in bios):
                 excluded = "exec_bio"
             else:
-                reason = dictionary.excluded_by(node, text[span_start:span_end])
+                # 도입문도 함께 본다: "Ratings: … Moody's (3)"처럼 문맥이 도입문에만 있을 때
+                row = span_rows[span_id]
+                context = f"{row['lead_text'] or ''}\n{row['text']}"
+                reason = dictionary.excluded_by(node, context, text, (start, end))
                 if reason:
                     excluded = f"context:{reason}"
             mentions.append(

@@ -18,7 +18,7 @@ import sqlite3
 import numpy as np
 import pandas as pd
 
-from .judge import Judgement, decide
+from .judge import Judgement, combine, decide
 from .judge.questions import ENTITY_Q, RELATION_QUESTIONS, STATUS_Q, YES_NO_QUESTIONS
 from .reviews import LATEST_LABELS
 
@@ -84,15 +84,7 @@ def unit_table(
 
 
 def _combine(row: dict, relation: str) -> str | None:
-    """7.4 규칙: 회사 식별이 기각되면 기각, 둘 다 채택이면 채택, 나머지는 불확실."""
-    decisions = [row[f"d_{q}"] for q in (ENTITY_Q, relation)]
-    if any(d is None for d in decisions):
-        return None
-    if "no" in decisions:
-        return "no"
-    if all(d == "yes" for d in decisions):
-        return "yes"
-    return "abstain"
+    return combine(row[f"d_{ENTITY_Q}"], row[f"d_{relation}"])
 
 
 # ---------------------------------------------------------------- 지표

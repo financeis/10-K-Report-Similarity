@@ -64,6 +64,9 @@ class ExcludeContext(_Strict):
     tickers: list[str] = Field(default_factory=list)
     """이 회사를 가리키는 언급에만 적용. 비우면 모든 언급."""
     pattern: str
+    window: int | None = None
+    """정하면 근거 문장 대신 본문에서 언급 앞뒤 이 글자 수만큼을 본다. 표가 풀려 문장이 한 줄로
+    잘린 경우(신용등급 표의 "Moody's (3)" 같은 줄)를 잡으려는 것이다."""
 
 
 class AliasFile(_Strict):
@@ -116,6 +119,7 @@ class ContextRule:
     nodes: frozenset[str]
     """비어 있으면 모든 언급에 적용."""
     pattern: re.Pattern
+    window: int | None = None
 
     def applies(self, node_id: str, text: str) -> bool:
         return (not self.nodes or node_id in self.nodes) and bool(self.pattern.search(text))
@@ -141,9 +145,15 @@ class NameDictionary:
                 return e
         return None
 
-    def excluded_by(self, node_id: str, text: str) -> str | None:
+    def excluded_by(
+        self, node_id: str, text: str, document: str | None = None, at: tuple[int, int] = (0, 0)
+    ) -> str | None:
+        """text: 근거 문장(도입문 포함). window가 있는 규칙은 document[at] 앞뒤를 본다."""
         for rule in self.rules:
-            if rule.applies(node_id, text):
+            target = text
+            if rule.window and document is not None:
+                target = document[max(0, at[0] - rule.window) : at[1] + rule.window]
+            if rule.applies(node_id, target):
                 return rule.reason
         return None
 
@@ -229,6 +239,7 @@ def build_dictionary(universe: pd.DataFrame, aliases: AliasFile) -> NameDictiona
             r.reason,
             frozenset(ticker_node[t] for t in r.tickers if t in ticker_node),
             re.compile(r.pattern, re.I),
+            r.window,
         )
         for r in aliases.exclude_contexts
     ]

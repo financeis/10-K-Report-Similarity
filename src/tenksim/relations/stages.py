@@ -180,13 +180,101 @@ def stage_export(
         universe=load_universe(cfg),
         documents=analyzed_documents(cfg),
         meta=meta,
+        relations=lambda con: relations_from_cache(cfg, con),
     )
 
 
-def stage_relations(cfg: Config) -> Path:
-    """이름 언급 → 후보 → graph.db를 이어서 만든다."""
+def stage_relations(cfg: Config, judge: bool = True) -> Path:
+    """이름 언급 → 후보 → graph.db → (판정 → 관계를 합쳐 graph.db 다시 쓰기)."""
     tables = stage_mentions(cfg)
     cands = stage_candidates(cfg, tables)
+    path = stage_export(cfg, tables, cands)
+    if not judge:
+        return path
+    try:
+        return stage_judge_all(cfg, tables=tables, cands=cands)
+    except SystemExit as exc:  # 키가 없거나 인증 실패: 판정 없이 둔다
+        log.warning("판정을 건너뜁니다: %s", exc)
+        return path
+
+
+def all_units(con: sqlite3.Connection) -> pd.DataFrame:
+    """판정할 단위 전부: 제외되지 않은 이름 언급의 (근거 구간, 언급된 회사)."""
+    units = pd.read_sql(
+        "SELECT DISTINCT span_id, doc_node, target_node, accession FROM mentions "
+        "WHERE excluded IS NULL ORDER BY doc_node, span_id, target_node",
+        con,
+    )
+    units["unit_id"] = units["span_id"] + "|" + units["target_node"]
+    a, b = units["doc_node"], units["target_node"]
+    units["pair_key"] = a.where(a < b, b) + "|" + b.where(a < b, a)
+    return units
+
+
+def _unit_requests(cfg: Config, con: sqlite3.Connection, units: pd.DataFrame):
+    from .judge.inputs import requests_for_units
+
+    j = relations_config(cfg).judge
+    return requests_for_units(
+        con, units["unit_id"], context=j.context, context_chars=j.context_chars
+    )
+
+
+def relations_from_cache(cfg: Config, con: sqlite3.Connection):
+    """graph.db(쓰는 중)의 모든 단위에 대해 캐시에 있는 판정만 꺼내 관계를 만든다. 모델은 부르지 않는다."""
+    from .judge.cache import connect, judge_cached
+    from .merge import build_relations
+
+    rel = relations_config(cfg)
+    units = all_units(con)
+    judge = make_judge(cfg)
+    run = judge_cached(
+        judge, _unit_requests(cfg, con, units), connect(judgements_path(cfg)), ask=False
+    )
+    judgements = {j.unit_id: j for j in run.judgements if j is not None}
+    candidates = pd.read_sql("SELECT pair_key, similarity_pct FROM candidates", con)
+    tables = build_relations(
+        units, judgements, rel.judge.threshold, candidates, set(rel.judge.validated)
+    )
+    e = tables.edges
+    summary = {
+        r: {d: int(((e["relation"] == r) & (e["decision"] == d)).sum()) for d in ("accepted", "uncertain")}
+        for r in ("competitor", "business", "equity")
+    }  # fmt: skip
+    if run.n_failed:
+        log.warning(
+            "판정하지 않은 단위 %d개는 관계에 넣지 않았습니다. `tenksim judge --all -c ...`로 판정하세요",
+            run.n_failed,
+        )
+    log.info("관계: 판정한 단위 %d/%d, %s", len(judgements), len(units), summary)
+    meta = {
+        "judge": judge_settings(cfg),
+        "validated_relations": rel.judge.validated,
+        "units": {"total": len(units), "judged": len(judgements)},
+        "edges": summary,
+    }
+    return tables, meta
+
+
+def stage_judge_all(cfg: Config, model: str | None = None, tables=None, cands=None) -> Path:
+    """graph.db의 모든 단위를 판정(캐시 우선)하고, 관계를 합쳐 graph.db를 다시 쓴다."""
+    from .judge.cache import connect, judge_cached
+    from .judge.jev import PRICE_PER_MILLION_INPUT, JudgeError
+
+    con = open_graph(cfg)
+    units = all_units(con)
+    requests = _unit_requests(cfg, con, units)
+    con.close()
+    judge = make_judge(cfg, model)
+    try:
+        run = judge_cached(judge, requests, connect(judgements_path(cfg)))
+    except JudgeError as exc:
+        raise SystemExit(str(exc)) from exc
+    log.info(
+        "전체 판정 %d건 (%s): 캐시 %d, 새로 %d, 실패 %d · 새 입력 %d토큰 (약 $%.3f)",
+        len(requests), judge.model_id, run.n_cached, run.n_new, run.n_failed, run.input_tokens,
+        run.input_tokens / 1e6 * PRICE_PER_MILLION_INPUT,
+    )  # fmt: skip
     return stage_export(cfg, tables, cands)
 
 

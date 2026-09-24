@@ -201,7 +201,7 @@ def _print_candidates(cands, tables, ticker: str, show_spans: bool) -> None:
 def cmd_export(cfg: Config, args) -> None:
     from .relations.stages import stage_export, stage_relations
 
-    path = stage_relations(cfg) if args.all else stage_export(cfg)
+    path = stage_relations(cfg, judge=False) if args.all else stage_export(cfg)
     log.info("Graph database: %s", path)
 
 
@@ -257,8 +257,15 @@ def cmd_sample(cfg: Config, args) -> None:
 def cmd_judge(cfg: Config, args) -> None:
     import json
 
-    from .relations.stages import make_judge, sample_requests, stage_judge
+    from .relations.stages import make_judge, sample_requests, stage_judge, stage_judge_all
 
+    if args.all:
+        if args.dry_run or args.sample or args.limit:
+            raise SystemExit("--all은 --sample, --limit, --dry-run과 함께 쓸 수 없습니다")
+        log.info("Graph database: %s", stage_judge_all(cfg, args.model))
+        return
+    if not args.sample:
+        raise SystemExit("--sample 이름이나 --all을 적어 주세요")
     if args.dry_run:
         judge = make_judge(cfg, args.model)
         requests = sample_requests(cfg, args.sample, args.limit, args.context)
@@ -367,9 +374,13 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--cap", type=int, default=40, help="회사당 최대 검수 단위 수")
     p.add_argument("--seed", type=int, default=0)
     p = add(
-        "judge", "관계도: 표본 검수 단위를 판정 모델(Jev)로 판정 (결과는 캐시에 쌓임)", cmd_judge
+        "judge",
+        "관계도: 판정 모델(Jev)로 판정 (결과는 캐시에 쌓임). --all이면 관계까지 만든다",
+        cmd_judge,
     )
-    p.add_argument("--sample", required=True, help="표본 이름 (예: dev1)")
+    p.add_argument("--sample", help="표본 이름 (예: dev1)")
+    p.add_argument("--all", action="store_true",
+                   help="모든 이름 언급을 판정하고 관계를 합쳐 graph.db를 다시 쓴다")  # fmt: skip
     p.add_argument("--model", help="판정 모델 (기본: 설정의 relations.judge.model)")
     p.add_argument("--limit", type=int, help="앞에서부터 이 개수만 (시험용)")
     p.add_argument("--dry-run", action="store_true", help="보내지 않고 첫 요청과 어림 토큰만 출력")

@@ -93,3 +93,14 @@ def decide(answer: dict | None, accept: float, reject: float) -> Decision:
     if score < reject:
         return "no"
     return "abstain"
+
+
+def combine(entity: Decision | None, relation: Decision | None) -> Decision | None:
+    """7.4 규칙: 회사 식별이 기각되면 기각, 식별과 관계가 모두 채택이면 채택, 나머지는 불확실."""
+    if entity is None or relation is None:
+        return None
+    if "no" in (entity, relation):
+        return "no"
+    if entity == relation == "yes":
+        return "yes"
+    return "abstain"

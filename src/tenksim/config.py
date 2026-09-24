@@ -183,6 +183,8 @@ class JudgeConfig(_Strict):
     """점수가 이 값 미만이면 기각. 그 사이는 불확실(재판정·검수 대상)."""
     thresholds: dict[JudgeQuestion, ThresholdConfig] = Field(default_factory=dict)
     """질문별로 다른 임계값. 적지 않은 값은 위의 accept·reject를 쓴다."""
+    validated: list[Literal["competitor", "business", "equity"]] = Field(default_factory=list)
+    """확인 표본에서 합격한 관계 유형. 나머지 유형의 관계는 화면에 '검증 전'으로 표시한다."""
 
     def threshold(self, question: str) -> tuple[float, float]:
         """(채택, 기각) 임계값."""

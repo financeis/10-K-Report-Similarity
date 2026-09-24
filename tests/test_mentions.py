@@ -155,3 +155,32 @@ def test_parse_figures_operator_and_unclear_attribution():
         n_targets=1,
     )
     assert all(f["value"] is None for f in figs)  # 여러 연도가 섞이면 비운다
+
+
+def test_rating_tables_are_excluded_by_window_and_lead_in():
+    aliases = AliasFile.model_validate(
+        {
+            "companies": {"NDAQ": {"names": ["Nasdaq"]}},
+            "exclude_contexts": [
+                {
+                    "reason": "credit_rating",
+                    "tickers": ["NDAQ"],
+                    "window": 40,
+                    "pattern": r"\bratings?\b|A\.M\. Best",
+                },  # fmt: skip
+                {"reason": "credit_rating", "tickers": ["NDAQ"], "pattern": r"\boutlook\b"},
+            ],
+        }
+    )
+    d = build_dictionary(UNIVERSE, aliases)
+    text = (
+        "Financial Strength Ratings\n"
+        "A.M. Best (1)\n"
+        "Nasdaq (3)\n"  # 표가 풀려 한 줄로 잘린 등급 표: 문장만 보면 문맥이 없다
+        "Our outlook ratings are summarized as follows:\n"
+        "•Nasdaq\n"  # 문맥은 도입문에만 있다
+        "Other matters are described in the notes.\n"
+        "In the exchange business we compete with many firms, and also with Nasdaq in data.\n"
+    )
+    m = run(d, doc(2, text)).mentions
+    assert m["excluded"].fillna("-").tolist() == ["context:credit_rating"] * 2 + ["-"]
