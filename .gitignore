@@ -19,3 +19,7 @@ dist/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# 웹앱 빌드 결과 (web/에서 npm run build)
+src/tenksim/app/static/
+node_modules/

@@ -204,6 +204,33 @@ def cmd_export(cfg: Config, args) -> None:
     log.info("Graph database: %s", path)
 
 
+def cmd_serve(cfg: Config, args) -> None:
+    try:
+        import uvicorn
+
+        from .app.server import STATIC_DIR, create_app
+    except ImportError as exc:
+        raise SystemExit("웹앱 의존성이 없습니다: uv sync --extra app") from exc
+    from .relations.stages import graph_path
+
+    path = graph_path(cfg)
+    if not path.exists():
+        raise SystemExit(f"{path}가 없습니다. 먼저 `tenksim export --all -c ...`를 실행하세요")
+    if not (STATIC_DIR / "index.html").exists():
+        log.warning(
+            "화면 파일이 없습니다. web/ 폴더에서 `npm install && npm run build`를 실행하세요"
+        )
+    url = f"http://127.0.0.1:{args.port}"
+    log.info("관계도 웹앱: %s (끝내려면 Ctrl+C)", url)
+    if not args.no_browser:
+        import threading
+        import webbrowser
+
+        threading.Timer(1.0, webbrowser.open, args=(url,)).start()
+    # 로컬 단일 사용자 앱이므로 이 컴퓨터에서만 접속할 수 있게 127.0.0.1로 고정한다
+    uvicorn.run(create_app(path), host="127.0.0.1", port=args.port, log_level="warning")
+
+
 def main(argv: list[str] | None = None) -> None:
     # 설치 위치가 아니라 명령을 실행한 폴더에서 .env를 찾는다
     load_dotenv(find_dotenv(usecwd=True))
@@ -253,6 +280,9 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--cached", action="store_true", help="다시 만들지 않고 저장된 결과만 출력")
     p = add("export", "관계도: 웹앱이 읽는 graph.db 만들기", cmd_export)
     p.add_argument("--all", action="store_true", help="이름 언급과 후보도 새로 만든 뒤 내보낸다")
+    p = add("serve", "관계도 웹앱 실행 (127.0.0.1)", cmd_serve)
+    p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--no-browser", action="store_true", help="브라우저를 자동으로 열지 않는다")
 
     args = parser.parse_args(argv)
     _setup_logging(args.verbose)

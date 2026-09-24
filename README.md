@@ -127,6 +127,23 @@ $ uv run tenksim explain -c configs/smoke.yaml --method minilm SNPS CDNS --top 1
 코사인 값 자체는 모델마다 분포가 달라 절대값으로 해석하면 안 됩니다.
 `explain`은 두 회사가 비슷하다고 나온 근거 문단을 보여줍니다(청크 임베딩 방법만).
 
+## 기업 관계도 (개발 중)
+
+10-K에서 기업 간 관계(경쟁·공급·협력·지분)를 근거 문장과 함께 찾아 보여주는 단독 웹앱입니다.
+설계와 진행 상황은 [docs/relation-map-plan.md](docs/relation-map-plan.md)에 있습니다.
+지금은 **판정 전 후보**(유사도 상위 기업 ∪ 10-K에 이름이 나온 기업)와 근거 문장까지 볼 수 있습니다.
+
+```bash
+uv sync --extra app                                        # 웹앱 의존성 (FastAPI)
+uv run tenksim export --all -c configs/sp500_2024.yaml     # 이름 언급 → 후보 → graph.db (10초 정도)
+cd web && npm install && npm run build && cd ..            # 화면 빌드 (Node.js 필요, 처음 한 번)
+uv run tenksim serve -c configs/sp500_2024.yaml            # http://127.0.0.1:8765 이 열립니다
+```
+
+- 단계별로 돌리려면 `tenksim mentions`, `tenksim candidates`, `tenksim export`를 차례로 실행합니다. `--ticker NVDA`를 붙이면 그 회사 결과를 터미널에 출력합니다.
+- 회사 이름 사전(별칭, 분사 시점, 제외할 문맥)은 [configs/aliases.yaml](configs/aliases.yaml)에서 고칩니다.
+- 화면을 고치는 중에는 `tenksim serve --no-browser`를 켜 두고 `web/`에서 `npm run dev`를 실행하면 바로 반영됩니다.
+
 ## 산출물
 
 | 경로 | 내용 |

@@ -26,7 +26,9 @@ sbert = ["sentence-transformers>=3.0"]
 openai = ["openai>=1.40", "tiktoken>=0.7"]
 # 수익률 기반 검증 (Yahoo Finance)
 returns = ["yfinance>=0.2.54", "curl_cffi>=0.15"]
-dev = ["pytest>=8", "ruff>=0.6"]
+# 관계도 웹앱 (tenksim serve)
+app = ["fastapi>=0.115", "uvicorn>=0.30"]
+dev = ["pytest>=8", "ruff>=0.6", "httpx>=0.25"]
 
 [project.scripts]
 tenksim = "tenksim.cli:main"

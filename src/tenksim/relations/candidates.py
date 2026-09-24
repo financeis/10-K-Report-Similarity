@@ -35,7 +35,10 @@ CUES: dict[str, re.Pattern] = {
         r"\bco-develop|\bresell|\bdistribut",
         re.I,
     ),
-    "ownership": re.compile(r"\bequity (?:interest|stake|method)|\bowns?\b|\bstake in\b", re.I),
+    # "their own products"의 own은 지분이 아니므로 owns/owned만 본다
+    "ownership": re.compile(
+        r"\bequity (?:interest|stake|method)|\bowns\b|\bowned by\b|\b(?:stake|shares) in\b", re.I
+    ),
 }
 _CUE_ORDER = [*CUES, "none"]
 
