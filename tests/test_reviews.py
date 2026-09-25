@@ -120,6 +120,35 @@ def test_labels_are_validated_and_latest_wins(dbs):
     assert progress["n_labeled"] == 1
 
 
+def test_labels_follow_a_span_whose_id_changed(dbs):
+    """근거 구간 규칙이 바뀌어 구간이 넓어지면(span_id가 바뀜) 표본 단위와 라벨이 새 구간을 따라간다."""
+    rev, graph, _ = dbs
+    reviews.create_sample(rev, graph, sample_id="dev1", purpose="dev", n_companies=1)
+    unit = units_of(rev, "dev1")["unit_id"].iloc[0]
+    reviews.record_label(rev, graph, unit=unit, sample_id="dev1", is_entity="yes",
+                         relations=["competitor"])  # fmt: skip
+    old_spans = pd.read_sql(
+        "SELECT span_id, accession, section, char_start, char_end FROM spans", graph
+    )
+    span_id, target = unit.rsplit("|", 1)
+    prefix, rng = span_id.rsplit(":", 1)
+    start, end = (int(x) for x in rng.split("-"))
+    wider = f"{prefix}:{start}-{end + 3}"
+    with graph:
+        graph.execute(
+            "UPDATE spans SET span_id = ?, char_end = ? WHERE span_id = ?",
+            (wider, end + 3, span_id),
+        )
+        graph.execute("UPDATE mentions SET span_id = ? WHERE span_id = ?", (wider, span_id))
+    mapping = reviews.moved_units(rev, old_spans, graph)
+    assert mapping == {unit: f"{wider}|{target}"}
+    assert reviews.remap_units(rev, mapping) == 1
+    assert unit not in set(units_of(rev, "dev1")["unit_id"])
+    label = reviews.latest_label(rev, f"{wider}|{target}")
+    assert label["relations"] == ["competitor"] and label["span_id"] == wider
+    assert reviews.latest_label(rev, unit) is None
+
+
 def test_review_api_is_blind_and_saves(dbs):
     pytest.importorskip("fastapi")
     from fastapi.testclient import TestClient

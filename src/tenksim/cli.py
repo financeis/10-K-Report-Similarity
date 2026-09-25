@@ -304,6 +304,13 @@ def cmd_relations_events(cfg: Config, args) -> None:
     log.info("실적 발표 이벤트 스터디 리포트: %s", path)
 
 
+def cmd_relations_changes(cfg: Config, args) -> None:
+    from .relations.years import stage_changes
+
+    _, path = stage_changes(cfg, load_config(args.base))
+    log.info("관계도 연도 비교 리포트: %s", path)
+
+
 def cmd_serve(cfg: Config, args) -> None:
     try:
         import uvicorn
@@ -415,6 +422,11 @@ def main(argv: list[str] | None = None) -> None:
             cmd_relations_events)  # fmt: skip
     p.add_argument("--n-boot", type=int, help="부트스트랩 횟수 (기본: evaluation.n_boot)")
     p.add_argument("--refresh", action="store_true", help="받아 둔 8-K 목록도 다시 받는다")
+    p = add("relations-changes", "관계도: 두 해 관계도 비교 (유지·새로 보임·보이지 않음과 그 이유)",
+            cmd_relations_changes)  # fmt: skip
+    p.add_argument(
+        "--base", required=True, help="비교할 앞 해의 설정 (예: configs/sp500_2024.yaml)"
+    )
     p = add("serve", "관계도 웹앱 실행 (127.0.0.1)", cmd_serve)
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("--no-browser", action="store_true", help="브라우저를 자동으로 열지 않는다")

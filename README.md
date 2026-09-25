@@ -145,6 +145,7 @@ uv run tenksim serve -c configs/sp500_2024.yaml            # http://127.0.0.1:87
 - **전체 판정과 관계 만들기 (2단계):** `uv run tenksim judge --all -c configs/sp500_2024.yaml`은 모든 이름 언급(S&P 500 약 3,600문장, 약 $0.2)을 판정하고, 두 회사 관계(경쟁 · 공급·협력 · 지분)와 근거 문장을 `graph.db`에 합칩니다. `tenksim export`는 이미 판정한 것만 합치고 모델을 부르지 않습니다. 신용평가사 언급은 관계로 치지 않습니다(`configs/aliases.yaml`의 `credit_rating`).
 - **관계 유형별 주가 동조성 (2단계):** `uv run tenksim relations-report -c configs/sp500_2024.yaml`은 관계 유형별로 2025년 잔차 상관을 비교하고, GICS·텍스트 유사도·회사 고정효과를 통제한 기업쌍 회귀를 돌려 [reports/relations_sp500_2024.md](reports/relations_sp500_2024.md)를 씁니다(1분 정도, `evaluate`가 받아 둔 주가를 씀). 관계도의 검수 결과도 반영합니다. S&P 500에서는 관계가 있는 쌍이 같이 움직이지만, 그 몫은 대부분 GICS와 텍스트 유사도가 이미 설명합니다.
 - **실적 발표 때의 주가 전이 (3단계):** `uv run tenksim relations-events -c configs/sp500_2024.yaml`은 2025년 실적 발표(8-K Item 2.02)마다 관계 상대 회사의 주가 반응을 재고(이벤트 스터디), [reports/relations_events_sp500_2024.md](reports/relations_events_sp500_2024.md)를 씁니다. 처음 한 번은 SEC에서 회사별 8-K 목록을 받습니다(무료, `EDGAR_IDENTITY` 필요, 5분 정도). 그 뒤로는 받아 둔 목록을 써서 2분 정도면 끝납니다(`evaluate`가 받아 둔 주가와 `judge --all`로 만든 graph.db를 씀). 경쟁사는 실적 발표에 같은 방향으로 반응합니다(발표 회사가 10% 움직이면 약 0.5%, 평소 날과 비교해 어림하면 그중 절반 가까이는 평소 동조성). 하지만 같은 업종의 관계 없는 회사와 뚜렷한 차이가 없고, GICS·텍스트 유사도를 통제하면 관계가 더하는 반응은 0과 구별되지 않습니다.
+- **최신 연도와 연도 비교 (3단계):** `configs/sp500_2025.yaml`은 2025년에 제출된 10-K로 같은 관계도를 만듭니다(`uv run tenksim run -c configs/sp500_2025.yaml`, 유사도는 관계도 후보에 쓰는 tfidf·OpenAI만, OpenAI 약 $0.09 + Jev 약 $0.19). `uv run tenksim relations-changes -c configs/sp500_2025.yaml --base configs/sp500_2024.yaml`은 두 해 관계도를 회사(티커)끼리 맞춰 유지·새로 보임·보이지 않음과 그 이유(공시에서 이름이 빠짐, 판정이 바뀜, 한쪽 10-K를 분석 못 함)를 세고 [reports/relations_changes_sp500_2025.md](reports/relations_changes_sp500_2025.md)를 씁니다. 2025년 관계도만 보려면 `uv run tenksim serve -c configs/sp500_2025.yaml`.
 - 단계별로 돌리려면 `tenksim mentions`, `tenksim candidates`, `tenksim export`를 차례로 실행합니다(모두 `-c configs/sp500_2024.yaml`을 붙임). `mentions`와 `candidates`에 `--ticker NVDA`를 붙이면 그 회사 결과를 터미널에 출력합니다.
 - 회사 이름 사전(별칭, 분사 시점, 제외할 문맥)은 [configs/aliases.yaml](configs/aliases.yaml)에서 고칩니다.
 - 화면을 고치는 중에는 `uv run tenksim serve -c configs/sp500_2024.yaml --no-browser`를 켜 두고 `web/`에서 `npm run dev`를 실행하면 바로 반영됩니다.
@@ -159,6 +160,7 @@ uv run tenksim serve -c configs/sp500_2024.yaml            # http://127.0.0.1:87
 | `data/runs/<name>/` | universe, 정제된 문서, method별 벡터·청크·이웃, `metrics.json` |
 | `data/runs/<name>/relations/` | 관계도: 이름 언급·근거 구간·후보(`*.parquet`), 웹앱이 읽는 `graph.db`, 판정 캐시 `judgements.sqlite`, 검수 기록 `reviews.sqlite`(다시 만들지 않고 쌓임), 채점 결과 `eval/`, 동조성 분석 `comovement.json` |
 | `reports/relations_<name>.md` | 관계 유형별 주가 동조성 리포트 ([S&P 500](reports/relations_sp500_2024.md)) |
+| `reports/relations_changes_<name>.md` | 두 해 관계도 비교 리포트 ([2024 → 2025](reports/relations_changes_sp500_2025.md)). 관계별 결과는 `relations/changes.parquet` |
 | `reports/relations_events_<name>.md` | 실적 발표 이벤트 스터디 리포트 ([S&P 500](reports/relations_events_sp500_2024.md)). 결과 수치는 `relations/events.json`, 받아 둔 8-K 목록은 `data/runs/<name>/earnings_8k_<기간>.parquet` |
 
 `data/`는 git에 올리지 않습니다. 이 밖에 edgartools의 HTTP 캐시(`~/.edgar`, 10-K 한 건에 평균 수 MB)와

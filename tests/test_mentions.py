@@ -88,6 +88,49 @@ def test_sentence_bounds_keep_abbreviations_together():
     assert sents == ["We compete with Huawei Technologies Co. Ltd. and Intel.", "Sales rose."]
 
 
+def test_sentence_bounds_join_hard_line_breaks():
+    # 원문의 줄 맞춤으로 문장 중간에 들어간 줄바꿈은 잇고, 문장이 끝난 줄바꿈과 제목 줄은 나눈다
+    text = (
+        "Our largest customers, which together accounted for 40% of\n"
+        "sales, are McKesson Corporation and Cardinal Health.\n"
+        "Competition\n"
+        "We face strong competition."
+    )
+    sents = [text[s:e] for s, e in sentence_bounds(text)]
+    assert sents == [
+        "Our largest customers, which together accounted for 40% of\n"
+        "sales, are McKesson Corporation and Cardinal Health.",
+        "Competition",
+        "We face strong competition.",
+    ]
+
+
+def test_sentence_bounds_join_long_open_lines_but_not_rows_or_bullets():
+    text = (
+        "We purchase most of our chips from one predominant merchant silicon vendor,\n"
+        "Broadcom, for our switching chips.\n"
+        "Total revenue,\n"
+        "Net income\n"
+        "a) Describe the climate-related risks the organization has identified over the short,\n"
+        "b) Describe the impact of climate-related risks.\n"
+        "Representative customers include:\n"
+        "lPuget Sound Energy, Inc.\n"
+        "lSouthern Company"
+    )
+    sents = [text[s:e] for s, e in sentence_bounds(text)]
+    assert sents == [
+        "We purchase most of our chips from one predominant merchant silicon vendor,\n"
+        "Broadcom, for our switching chips.",
+        "Total revenue,",  # 짧은 줄(표 행)은 잇지 않는다
+        "Net income",
+        "a) Describe the climate-related risks the organization has identified over the short,",
+        "b) Describe the impact of climate-related risks.",  # 항목 표시 앞은 잇지 않는다
+        "Representative customers include:",
+        "lPuget Sound Energy, Inc.",  # Wingdings 'l' 글머리표
+        "lSouthern Company",
+    ]
+
+
 def test_mentions_spans_and_self_mentions(dictionary):
     text = (
         "Amazon is our largest customer. "
@@ -113,6 +156,35 @@ def test_list_items_get_their_lead_in(dictionary):
     spans = t.spans.set_index("span_id")
     for span_id in t.mentions["span_id"]:
         assert spans.at[span_id, "lead_text"] == "Our current competitors include:"
+
+
+def test_prose_after_a_bulleted_list_gets_no_lead_in(dictionary):
+    text = (
+        "Our current competitors include:\n"
+        "•cloud companies with internal teams;\n"
+        "•foundries.\n"
+        "In addition, we sell through Amazon and other online retailers under long-term agreements "
+        "that renew each year and that cover most of our consumer products in North America.\n"
+        "Key competitors:\n"
+        "(1) Includes TSMC and other foundries in Asia."
+    )
+    t = run(dictionary, doc(2, text))
+    spans = t.spans.set_index("span_id")
+    lead = {row.target_node: spans.at[row.span_id, "lead_text"] for row in t.mentions.itertuples()}
+    assert pd.isna(lead["cik:1"])  # 목록이 끝난 뒤의 일반 문장 (Amazon)
+    assert lead["cik:1046179"] == "Key competitors:"  # 각주는 도입문을 붙인다 (TSMC)
+
+
+def test_second_sentence_inside_a_bullet_keeps_the_lead_in(dictionary):
+    text = (
+        "In our business, we compete with:\n"
+        "•Cloud vendors. These include Amazon and others with internal teams.\n"
+        "•Foundries."
+    )
+    t = run(dictionary, doc(2, text))
+    spans = t.spans.set_index("span_id")
+    (span_id,) = t.mentions.loc[t.mentions["target_node"] == "cik:1", "span_id"]
+    assert spans.at[span_id, "lead_text"] == "In our business, we compete with:"
 
 
 def test_exec_bio_and_context_exclusions(dictionary):

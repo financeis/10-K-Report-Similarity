@@ -15,7 +15,7 @@ from ..config import Config, RelationsConfig
 from ..pipeline import load_documents, load_universe, similarity_for
 from .candidates import Candidates, build_candidates
 from .export import export_graph
-from .mentions import MentionTables, find_mentions, text_hash
+from .mentions import SPAN_RULES, MentionTables, find_mentions, text_hash
 from .names import build_dictionary, load_aliases
 
 log = logging.getLogger(__name__)
@@ -82,6 +82,7 @@ def stage_mentions(cfg: Config) -> MentionTables:
     meta = {
         "created": datetime.now().isoformat(timespec="seconds"),
         "aliases_hash": text_hash(rel.aliases.read_text(encoding="utf-8")),
+        "span_rules": SPAN_RULES,
         "n_documents": int(len(docs)),
         "n_names": len(dictionary.entries),
         "n_mentions": int(len(m)),

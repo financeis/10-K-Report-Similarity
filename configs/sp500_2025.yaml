@@ -1,0 +1,54 @@
+# S&P 500 전체, 2025년에 제출된 10-K. 관계도의 최신 연도(계획서 3-2)입니다.
+# 2024년 실행(sp500_2024)과 같은 기업 목록·관계도 설정을 쓰고, 유사도는 관계도 후보에 쓰는 것만 만듭니다
+# (tfidf + openai-3-large-1536 → tfidf-openai). OpenAI 임베딩은 이 규모에서 10센트 정도입니다.
+#
+# 수익률 검증 구간은 공시 다음 해(2026년)인데, 아직 한 해가 다 차지 않아 9월 25일까지만 씁니다.
+name: sp500_2025
+
+universe:
+  source: sp500_wikipedia
+  # 2025년에 10-K를 낸 CIK. BLK는 2024년 GIP 인수 뒤 새 지주회사(2012383)가 10-K를 내므로 고치지 않습니다.
+  cik_overrides:
+    XOM: 34088    # 2026년 ExxonMobil Holdings Corp(2115436)로 지주회사 전환
+    PSKY: 813828  # 2025년 8월 Skydance 합병 전 Paramount Global(PARA)이 2025년 2월에 낸 10-K
+
+filings:
+  year: 2025
+  sections: [business, risk_factors]
+  workers: 4
+
+methods:
+  - name: tfidf
+    kind: tfidf
+  - name: openai-3-large-1536
+    kind: openai
+    model: text-embedding-3-large
+    max_tokens: 384
+    doc_tokens: 1536
+
+ensembles:
+  - name: tfidf-openai
+    members: [tfidf, openai-3-large-1536+center]
+
+evaluation:
+  k: [1, 5, 10]
+  labels: [gics_sector, gics_sub_industry, sic2, sic3]
+  returns:
+    start: 2026-01-01
+    end: 2026-09-25
+    market: equal_weight
+
+relations:
+  aliases: configs/aliases.yaml
+  similarity: tfidf-openai
+  top_k: 20
+  judge:
+    model: jev-1.13.0
+    context: nearby
+    accept: 0.8
+    reject: 0.3
+    thresholds:
+      is_entity: {reject: 0.5}
+      competitor: {accept: 0.7, reject: 0.5}
+      business: {reject: 0.5}
+    validated: [competitor, business]   # 2024년 확인 표본 conf1에서 합격한 설정을 그대로 씀

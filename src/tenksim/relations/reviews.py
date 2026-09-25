@@ -19,6 +19,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+import pandas as pd
+
 from .mentions import text_hash
 
 REVIEWS_SCHEMA_VERSION = 2
@@ -351,6 +353,55 @@ def record_label(
              _now(), REVIEWS_SCHEMA_VERSION),
         )  # fmt: skip
     return int(cur.lastrowid)
+
+
+def moved_units(
+    reviews: sqlite3.Connection, old_spans: pd.DataFrame, graph: sqlite3.Connection
+) -> dict[str, str]:
+    """근거 구간 규칙이 바뀌어 span_id가 사라진 표본 단위 → 그 구간을 품는 새 단위.
+
+    old_spans: 규칙을 바꾸기 전 spans (span_id, accession, section, char_start, char_end).
+    새 구간은 같은 10-K 쪽에서 옛 구간의 위치를 모두 품고, 같은 회사를 언급하는(제외되지 않은) 것이다.
+    하나로 정해지지 않는 단위는 넣지 않는다(검수 기록은 그대로 남고 채점에서만 빠진다).
+    """
+    units = pd.read_sql("SELECT DISTINCT unit_id, span_id, target_node FROM sample_units", reviews)
+    new = pd.read_sql("SELECT span_id, accession, section, char_start, char_end FROM spans", graph)
+    live = pd.read_sql(
+        "SELECT span_id, target_node FROM mentions WHERE excluded IS NULL", graph
+    ).drop_duplicates()
+    old = old_spans.set_index("span_id")
+    out = {}
+    for u in units[~units["span_id"].isin(new["span_id"])].itertuples():
+        if u.span_id not in old.index:
+            continue
+        o = old.loc[u.span_id]
+        c = new[(new["accession"] == o["accession"]) & (new["section"] == o["section"])
+                & (new["char_start"] <= o["char_start"]) & (new["char_end"] >= o["char_end"])]  # fmt: skip
+        c = c[c["span_id"].isin(live.loc[live["target_node"] == u.target_node, "span_id"])]
+        if len(c) == 1:
+            out[u.unit_id] = unit_id(c["span_id"].iloc[0], u.target_node)
+    # 옛 단위 둘이 새 단위 하나로 합쳐지거나 새 단위가 이미 표본에 있으면 옮기지 않는다
+    targets = pd.Series(list(out.values()), dtype=object)
+    taken = set(units["unit_id"]) | set(targets[targets.duplicated(keep=False)])
+    return {old: new for old, new in out.items() if new not in taken}
+
+
+def remap_units(reviews: sqlite3.Connection, mapping: dict[str, str]) -> int:
+    """표본 단위와 그 라벨의 unit_id·span_id를 새 것으로 바꾼다. 검수한 원문(span_text)과 해시는 그대로
+    두므로, 화면은 원문이 바뀌었다고 표시한다. 바꾼 표본 단위 수를 돌려준다."""
+    n = 0
+    with reviews:
+        for old, new in mapping.items():
+            span = new.rsplit("|", 1)[0]
+            n += reviews.execute(
+                "UPDATE sample_units SET unit_id = ?, span_id = ? WHERE unit_id = ?",
+                (new, span, old),
+            ).rowcount
+            reviews.execute(
+                "UPDATE span_labels SET unit_id = ?, span_id = ? WHERE unit_id = ?",
+                (new, span, old),
+            )
+    return n
 
 
 LATEST_LABELS = """

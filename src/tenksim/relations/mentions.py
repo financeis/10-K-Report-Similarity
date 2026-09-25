@@ -30,7 +30,22 @@ _ABBREVIATIONS = {
     "St.", "No.", "Nos.", "U.S.", "U.K.", "S.A.", "N.V.", "L.P.", "Inc.,", "vs.", "e.g.", "i.e.",
 }  # fmt: skip
 _INITIAL = re.compile(r"(?:[A-Z]\.)+")  # "J.P." "A." 같은 머리글자
-_BULLETS = set("•●◦▪■-–*·")
+_BULLETS = set("•●◦▪■-–*·\x95")
+"""글머리표. \\x95와 \\uf0b7·\\uf0a7(Wingdings 글꼴의 글머리표가 문자로 남은 것)도 포함한다."""
+_LETTER_BULLET = re.compile(r"[lo](?=[A-Z])")
+"""Wingdings의 'l'·'o' 글머리표가 글자로 남은 줄 ('lPuget Sound Energy, Inc.')."""
+_SENTENCE_END = set('.!?:;"”’)]')
+"""줄 끝이 이 문자면 줄바꿈을 문장 경계로 본다."""
+_FOOTNOTE = re.compile(r"^\(?\d{1,2}\)")
+_ROW_MARKER = re.compile(r"(?:\(?\d{1,2}\)|\(?[a-z]\))\s")
+"""줄 머리의 항목 표시 ('(1) ', 'b) ') — 이 앞의 줄바꿈은 잇지 않는다."""
+_OPEN_END = re.compile(
+    r"(?:,|\b(?:the|of|and|or|in|from|to|by|with|as|such|including|upon|than|between|for|at|on|"
+    r"a|an|our|its|their))$"
+)
+"""문장이 끝나지 않은 줄 끝 (쉼표, 관사·전치사·접속사)."""
+_WRAP_MIN_LINE = 60
+"""이보다 긴 줄이 _OPEN_END로 끝날 때만 대문자로 시작하는 다음 줄과 잇는다 (표 행을 붙이지 않도록)."""
 _LEAD_IN_MAX_DISTANCE = 6000
 _PRONOUN_START = re.compile(r"^(?:It|They|These|This|Such|Its|Their|Both|Each of them)\b")
 
@@ -67,12 +82,47 @@ _COMBINED = re.compile(r"\b(?:together|combined|collectively|in the aggregate|ag
 _EACH = re.compile(r"\beach\b", re.I)
 
 
+SPAN_RULES = 3
+"""근거 구간 규칙의 판 (3-2). 2: 문장 중간 줄바꿈(소문자로 이어지는 줄)을 잇고, 목록이 끝난 뒤 문장에는
+도입문을 붙이지 않음. 3: 쉼표·전치사로 끝나는 긴 줄도 잇고, 항목 안의 둘째 문장에는 도입문을 붙이며,
+Wingdings 글머리표를 알아봄."""
+
+
 def text_hash(text: str) -> str:
     return hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
 
 
+def _bullet_at(text: str, i: int) -> bool:
+    """text[i]에서 글머리표로 시작하는가 (Wingdings 'l'·'o' 글머리표 포함)."""
+    return i < len(text) and (text[i] in _BULLETS or bool(_LETTER_BULLET.match(text, i)))
+
+
+def _wrapped(text: str, brk: int, nxt: int) -> bool:
+    """text[brk:nxt]의 줄바꿈 하나가 문장 중간의 줄 맞춤인가."""
+    before = text[brk - 1] if brk > 0 else "."
+    if before in _SENTENCE_END or nxt >= len(text):
+        return False
+    if _bullet_at(text, nxt) or _ROW_MARKER.match(text, nxt):
+        return False
+    if text[nxt].islower():
+        return True
+    line_start = text.rfind("\n", 0, brk) + 1
+    line = text[line_start:brk]
+    return (
+        len(line) > _WRAP_MIN_LINE
+        and not _bullet_at(text, line_start)
+        and bool(_OPEN_END.search(line))
+    )
+
+
 def sentence_bounds(text: str) -> list[tuple[int, int]]:
-    """문장별 (시작, 끝). 앞뒤 공백은 뺀다. 'Inc.', 'Co.' 같은 약어 뒤에서는 나누지 않는다."""
+    """문장별 (시작, 끝). 앞뒤 공백은 뺀다. 'Inc.', 'Co.' 같은 약어 뒤에서는 나누지 않는다.
+
+    줄바꿈은 문장 경계로 보되, 문장 중간에 들어간 줄바꿈(원문의 줄 맞춤, 지운 표·쪽번호 줄)은 잇는다.
+    - 앞 줄이 문장 부호 없이 끝나고 다음 줄이 소문자로 시작할 때
+    - 앞 줄이 길고(60자 넘음) 쉼표나 관사·전치사로 끝날 때 ("merchant silicon vendor,\\nBroadcom ...")
+    다음 줄이 글머리표나 항목 표시('(1) ', 'b) ')로 시작하면 잇지 않는다.
+    """
     out = []
     pos = 0
     for m in _SENTENCE_BREAK.finditer(text):
@@ -80,6 +130,8 @@ def sentence_bounds(text: str) -> list[tuple[int, int]]:
             word = text[max(pos, m.start() - 12) : m.start()].rsplit(None, 1)[-1:]
             if word and (word[0] in _ABBREVIATIONS or _INITIAL.fullmatch(word[0])):
                 continue
+        elif m.group(0).count("\n") == 1 and _wrapped(text, m.start(), m.end()):
+            continue
         out.append((pos, m.start()))
         pos = m.end()
     out.append((pos, len(text)))
@@ -131,21 +183,37 @@ def main_start(text: str, sents: list[tuple[int, int]], i: int, max_chars: int) 
     return s
 
 
+def _is_item(text: str, s: int, e: int) -> bool:
+    """목록 항목처럼 보이는가: 글머리표로 시작하거나, 짧고 마침표로 끝나지 않는 줄."""
+    return _bullet_at(text, s) or (e - s <= 200 and text[e - 1] != ".")
+
+
+def _in_bullet_line(text: str, s: int) -> bool:
+    """s가 글머리표로 시작하는 줄의 중간인가 (항목 안의 둘째 문장부터)."""
+    line_start = text.rfind("\n", 0, s) + 1
+    return line_start < s and _bullet_at(text, line_start)
+
+
 def lead_in(text: str, sents: list[tuple[int, int]], i: int) -> tuple[int, int] | None:
     """문장 i가 목록 항목이면 그 목록의 도입문("Our competitors include:") 위치.
 
-    목록 항목(글머리표로 시작하거나 짧고 마침표로 끝나지 않는 줄)을 거슬러 올라가다
-    콜론으로 끝나는 문장을 만나면 그것이 도입문이다. 도입문은 본문과 떨어져 있을 수 있어
-    근거 구간에 따로 저장한다.
+    목록 항목을 거슬러 올라가다 콜론으로 끝나는 문장을 만나면 그것이 도입문이다. 도입문은 본문과
+    떨어져 있을 수 있어 근거 구간에 따로 저장한다. 문장 i가 목록 항목이 아닌 일반 문장이고 도입문과
+    문장 i 사이에 글머리표 항목이 있으면, 목록이 이미 끝난 것이라 도입문을 붙이지 않는다. 한 항목 안의
+    둘째 문장부터, 표가 풀린 행, 각주("(1) ...")는 목록의 일부라 도입문을 그대로 붙인다.
     """
-    s, _ = sents[i]
+    s, e = sents[i]
     j = i - 1
     while j >= 0 and s - sents[j][0] <= _LEAD_IN_MAX_DISTANCE:
         ps, pe = sents[j]
         if text[pe - 1] == ":":
+            prose = not (
+                _is_item(text, s, e) or _in_bullet_line(text, s) or _FOOTNOTE.match(text[s:e])
+            )
+            if prose and any(_bullet_at(text, sents[k][0]) for k in range(j + 1, i)):
+                return None
             return ps, pe
-        is_item = text[ps] in _BULLETS or (pe - ps <= 200 and text[pe - 1] != ".")
-        if not is_item:
+        if not _is_item(text, ps, pe):
             return None
         j -= 1
     return None
