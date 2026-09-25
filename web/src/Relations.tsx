@@ -203,7 +203,12 @@ export function EdgePanel({
     <div className="pair">
       <h2 className="pair-title">
         <a href={href(me.node_id)}>{me.name}</a>
-        <span className="muted"> ↔ </span>
+        <span
+          className="pair-link"
+          role="img"
+          aria-label="↔"
+          style={{ "--c": RELATION_COLOR[d.relation] } as React.CSSProperties}
+        />
         <a href={href(other.node_id)}>{other.name}</a>
       </h2>
       <div className="edge-head">
@@ -268,7 +273,11 @@ export function EdgePanel({
           근거 문장 <span className="muted">{d.evidence.length}개 · 점수 높은 순</span>
         </h3>
         {d.evidence.map((ev) => (
-          <article key={`${ev.span_id}|${ev.target_node}`} className="span-card">
+          <article
+            key={`${ev.span_id}|${ev.target_node}`}
+            className="span-card accent"
+            style={{ "--c": RELATION_COLOR[d.relation] } as React.CSSProperties}
+          >
             <div className="span-meta">
               <b className="doc-name">{names[ev.doc_node] ?? ev.doc_node}</b>
               <span>의 10-K · {SECTION[ev.section] ?? ev.section}</span>

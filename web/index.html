@@ -4,6 +4,22 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>10-K 관계도</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%233257e6'/%3E%3Cg stroke='%23fff' stroke-width='2' opacity='.75'%3E%3Cpath d='M16 16 8 9M16 16l9-6M16 16l-7 8M16 16l8 7'/%3E%3C/g%3E%3Ccircle cx='16' cy='16' r='4.5' fill='%23fff'/%3E%3Ccircle cx='8' cy='9' r='2.5' fill='%23ff8a8e'/%3E%3Ccircle cx='25' cy='10' r='2.5' fill='%23ff8a8e'/%3E%3Ccircle cx='9' cy='24' r='2.5' fill='%235ee0cc'/%3E%3Ccircle cx='24' cy='23' r='2.5' fill='%235ee0cc'/%3E%3C/svg%3E" />
+    <!-- 한글 글꼴. 인터넷이 없으면 시스템 글꼴(맑은 고딕 등)로 보인다 -->
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css"
+    />
+    <script>
+      // 밝은·어두운 화면: 저장한 값, 없으면 시스템 설정 (src/hooks.ts의 THEME_KEY와 같은 키)
+      try {
+        var t = localStorage.getItem("tenksim-theme");
+        document.documentElement.dataset.theme =
+          t === "dark" || t === "light" ? t : matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+      } catch (e) {
+        document.documentElement.dataset.theme = "light";
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>

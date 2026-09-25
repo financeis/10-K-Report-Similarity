@@ -557,7 +557,8 @@ def create_app(graph_db: Path, reviews_db: Path | None = None) -> FastAPI:
 
         @app.get("/{path:path}", include_in_schema=False)
         def spa(path: str):
-            return FileResponse(STATIC_DIR / "index.html")
+            # 화면을 다시 빌드하면 파일 이름(해시)이 바뀌므로, 브라우저가 옛 index.html을 쓰지 않게 한다
+            return FileResponse(STATIC_DIR / "index.html", headers={"Cache-Control": "no-cache"})
 
     return app
 

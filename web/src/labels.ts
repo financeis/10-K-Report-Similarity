@@ -40,18 +40,35 @@ export const OPERATOR: Record<string, string> = { "=": "", ">=": "≥", "~": "�
 
 // GICS 섹터 색. 섹터를 넘는 연결이 눈에 띄게 하려는 것 (계획서 8.2).
 export const SECTOR_COLOR: Record<string, string> = {
-  "Information Technology": "#3b6fd8",
-  "Communication Services": "#8a5cd6",
-  "Consumer Discretionary": "#d9822b",
-  "Consumer Staples": "#6f9a3a",
-  "Health Care": "#d0485f",
-  Financials: "#2f9e8f",
-  Industrials: "#5b6fa3",
-  Energy: "#b5651d",
-  Materials: "#a08a2c",
-  Utilities: "#4f8fbf",
-  "Real Estate": "#b3569f",
+  "Information Technology": "#4263eb",
+  "Communication Services": "#8e5bd8",
+  "Consumer Discretionary": "#f08c3a",
+  "Consumer Staples": "#74b243",
+  "Health Care": "#e0547a",
+  Financials: "#1c9fb0",
+  Industrials: "#7384a8",
+  Energy: "#b8662b",
+  Materials: "#b39b2e",
+  Utilities: "#4fa3d9",
+  "Real Estate": "#c05aa8",
 };
+
+export const SECTOR_KO: Record<string, string> = {
+  "Information Technology": "정보기술",
+  "Communication Services": "커뮤니케이션",
+  "Consumer Discretionary": "경기소비재",
+  "Consumer Staples": "필수소비재",
+  "Health Care": "헬스케어",
+  Financials: "금융",
+  Industrials: "산업재",
+  Energy: "에너지",
+  Materials: "소재",
+  Utilities: "유틸리티",
+  "Real Estate": "부동산",
+};
+
+/** 분석 대상 밖 회사(섹터 모름)의 점 색. */
+export const EXTERNAL_COLOR = "#9aa0a6";
 
 export function sectorColor(sector: string | null): string {
   return (sector && SECTOR_COLOR[sector]) || "var(--muted-2)";
@@ -81,9 +98,9 @@ export const RELATION_HINT: Record<string, string> = {
 
 // 관계 선 색. 섹터 색(점)과 겹치지 않게 채도가 다른 색을 쓴다.
 export const RELATION_COLOR: Record<string, string> = {
-  competitor: "#d1495b",
-  business: "#2a9d8f",
-  equity: "#e9a03b",
+  competitor: "#e5484d",
+  business: "#12a594",
+  equity: "#f5a524",
 };
 
 export const RELATIONS = ["competitor", "business", "equity"] as const;

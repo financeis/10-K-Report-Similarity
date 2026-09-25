@@ -3,33 +3,49 @@
 import type { Figure, NodeDetail } from "./api";
 import { Highlighted, type Range } from "./Highlighted";
 import { href } from "./hooks";
-import { KIND, OPERATOR, SECTION, sectorColor } from "./labels";
+import { KIND, OPERATOR, SECTION, SECTOR_KO, sectorColor } from "./labels";
 
 export function NodeHeader({ node }: { node: NodeDetail }) {
+  const color = sectorColor(node.gics_sector);
   return (
     <div className="node-header">
       <h1>
-        <span className="dot big" style={{ background: sectorColor(node.gics_sector) }} />
-        {node.name}
-        {node.ticker && <span className="ticker">{node.ticker}</span>}
-        {KIND[node.kind] && <span className="tag">{KIND[node.kind]}</span>}
+        <span className="node-avatar" style={{ background: color }}>
+          {(node.ticker ?? node.name.split(/\s+/).map((w) => w[0]).join("")).slice(0, 4).toUpperCase()}
+        </span>
+        <span className="node-title">
+          {node.name}
+          {node.ticker && <span className="ticker-chip">{node.ticker}</span>}
+          {KIND[node.kind] && <span className="tag">{KIND[node.kind]}</span>}
+        </span>
       </h1>
-      <p className="muted">
-        {node.gics_sector ? `${node.gics_sector} · ${node.gics_sub_industry}` : "GICS 분류 없음"}
-        {node.parent && (
+      <p className="node-sub">
+        {node.gics_sector ? (
           <>
-            {" · 공시한 회사 "}
-            <a href={href(node.parent.node_id)}>{node.parent.name}</a>
+            <span className="sector-pill" style={{ "--c": color } as React.CSSProperties}>
+              {SECTOR_KO[node.gics_sector] ?? node.gics_sector}
+            </span>
+            <span className="muted">{node.gics_sub_industry}</span>
           </>
+        ) : (
+          <span className="muted">GICS 분류 없음</span>
+        )}
+        {node.parent && (
+          <span className="muted">
+            {"공시한 회사 "}
+            <a href={href(node.parent.node_id)}>{node.parent.name}</a>
+          </span>
         )}
       </p>
       {node.filings.map((f) => (
-        <p key={f.accession} className="small muted">
+        <p key={f.accession} className="small muted filing">
           <a href={f.filing_url} target="_blank" rel="noreferrer">
-            {f.form} (제출 {f.filing_date}, 회계기간 {f.period_of_report}) ↗
+            {f.form} · 제출 {f.filing_date} · 회계기간 {f.period_of_report} ↗
           </a>
-          {" · 분석한 항목: "}
-          {(f.sections ?? "").split(",").map((s) => SECTION[s] ?? s).join(", ")}
+          <span>
+            {"분석한 항목: "}
+            {(f.sections ?? "").split(",").map((s) => SECTION[s] ?? s).join(", ")}
+          </span>
         </p>
       ))}
       {!node.analyzed && node.kind === "company" && (

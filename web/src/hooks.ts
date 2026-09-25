@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 
 // 주소 (모두 인코딩):
 // 회사:      #/node/<node_id>                    관계 화면
@@ -68,6 +68,34 @@ export function useRoute(): Route {
     return () => window.removeEventListener("hashchange", on);
   }, []);
   return route;
+}
+
+// ---------------------------------------------------------------- 밝은·어두운 화면
+// 처음 값은 index.html의 짧은 스크립트가 정한다 (저장한 값, 없으면 시스템 설정). 그래야 첫 화면이 깜빡이지 않는다.
+
+export type Theme = "light" | "dark";
+export const THEME_KEY = "tenksim-theme";
+const themeListeners = new Set<() => void>();
+
+function currentTheme(): Theme {
+  return document.documentElement.dataset.theme === "dark" ? "dark" : "light";
+}
+
+export function setTheme(theme: Theme) {
+  document.documentElement.dataset.theme = theme;
+  try {
+    localStorage.setItem(THEME_KEY, theme);
+  } catch {
+    /* 저장이 막힌 브라우저에서는 이번 방문에만 적용 */
+  }
+  themeListeners.forEach((f) => f());
+}
+
+export function useTheme(): Theme {
+  return useSyncExternalStore((cb) => {
+    themeListeners.add(cb);
+    return () => themeListeners.delete(cb);
+  }, currentTheme);
 }
 
 export type Loadable<T> = { data?: T; error?: string; loading: boolean };
