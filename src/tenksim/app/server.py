@@ -563,13 +563,7 @@ def create_app(graph_db: Path, reviews_db: Path | None = None) -> FastAPI:
 
 
 def _edge_state(e: dict) -> str:
-    """화면에 쓰는 최종 상태. 사람의 검수가 모델 판정보다 우선한다.
-    confirmed(사람이 맞다고 함) / accepted(모델 채택) / uncertain(검수 대기) / rejected(사람이 아니라고 함)."""
-    if e.get("review_state") == "rejected":
-        return "rejected"
-    if e.get("review_state") == "accepted":
-        return "confirmed"
-    return "accepted" if e["decision"] == "accepted" else "uncertain"
+    return reviews_mod.edge_state(e["decision"], e.get("review_state"))
 
 
 def _pair_status(edges: list[dict], fallback: str) -> str:

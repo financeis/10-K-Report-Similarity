@@ -452,3 +452,13 @@ def review_state(review: dict | None, current_hash: str) -> str | None:
     if review["evidence_hash"] != current_hash:
         return "needs_recheck"
     return "accepted" if review["verdict"] == "accept" else "rejected"
+
+
+def edge_state(decision: str, review_state: str | None) -> str:
+    """화면·분석에 쓰는 관계의 최종 상태. 사람의 검수가 모델 판정보다 우선한다.
+    confirmed(사람이 맞다고 함) / accepted(모델 채택) / uncertain(검수 대기) / rejected(사람이 아니라고 함)."""
+    if review_state == "rejected":
+        return "rejected"
+    if review_state == "accepted":
+        return "confirmed"
+    return "accepted" if decision == "accepted" else "uncertain"

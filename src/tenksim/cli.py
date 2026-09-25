@@ -290,6 +290,13 @@ def cmd_eval_relations(cfg: Config, args) -> None:
     log.info("채점 결과: %s (라벨과 어긋난 단위는 같은 폴더의 *_disagreements.csv)", path)
 
 
+def cmd_relations_report(cfg: Config, args) -> None:
+    from .relations.research import stage_research
+
+    _, path = stage_research(cfg, n_boot=args.n_boot)
+    log.info("관계 유형별 주가 동조성 리포트: %s", path)
+
+
 def cmd_serve(cfg: Config, args) -> None:
     try:
         import uvicorn
@@ -394,6 +401,9 @@ def main(argv: list[str] | None = None) -> None:
                    help="판정 입력 (기본: 설정의 relations.judge.context)")  # fmt: skip
     p.add_argument("--force", action="store_true",
                    help="확인 표본의 고정 설정과 달라도 채점 (합격 판단에는 쓰지 않음)")  # fmt: skip
+    p = add("relations-report", "관계도: 관계 유형별 주가 동조성 분석과 리포트",
+            cmd_relations_report)  # fmt: skip
+    p.add_argument("--n-boot", type=int, help="부트스트랩 횟수 (기본: evaluation.n_boot)")
     p = add("serve", "관계도 웹앱 실행 (127.0.0.1)", cmd_serve)
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("--no-browser", action="store_true", help="브라우저를 자동으로 열지 않는다")
