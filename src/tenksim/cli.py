@@ -297,6 +297,13 @@ def cmd_relations_report(cfg: Config, args) -> None:
     log.info("관계 유형별 주가 동조성 리포트: %s", path)
 
 
+def cmd_relations_events(cfg: Config, args) -> None:
+    from .relations.events import stage_events
+
+    _, path = stage_events(cfg, n_boot=args.n_boot, refresh=args.refresh)
+    log.info("실적 발표 이벤트 스터디 리포트: %s", path)
+
+
 def cmd_serve(cfg: Config, args) -> None:
     try:
         import uvicorn
@@ -404,6 +411,10 @@ def main(argv: list[str] | None = None) -> None:
     p = add("relations-report", "관계도: 관계 유형별 주가 동조성 분석과 리포트",
             cmd_relations_report)  # fmt: skip
     p.add_argument("--n-boot", type=int, help="부트스트랩 횟수 (기본: evaluation.n_boot)")
+    p = add("relations-events", "관계도: 실적 발표 때 관계 상대의 주가 반응 (이벤트 스터디)",
+            cmd_relations_events)  # fmt: skip
+    p.add_argument("--n-boot", type=int, help="부트스트랩 횟수 (기본: evaluation.n_boot)")
+    p.add_argument("--refresh", action="store_true", help="받아 둔 8-K 목록도 다시 받는다")
     p = add("serve", "관계도 웹앱 실행 (127.0.0.1)", cmd_serve)
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("--no-browser", action="store_true", help="브라우저를 자동으로 열지 않는다")

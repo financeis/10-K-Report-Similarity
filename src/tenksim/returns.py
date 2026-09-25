@@ -113,27 +113,31 @@ def residualize(
     return out
 
 
-def correlation_matrices(
+def residual_returns(
     prices: pd.DataFrame, tickers: list[str], market: str, min_obs: int
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """tickers 순서의 (raw 상관, 잔차 상관, 사용 가능 여부) 행렬.
+) -> tuple[pd.DataFrame, pd.DataFrame, np.ndarray]:
+    """tickers 순서의 (일별 수익률, 시장 모형 잔차, 사용 가능 여부). 수익률 이력이 부족한 종목은
+    잔차가 NaN 열이다.
 
     market: EQUAL_WEIGHT(유니버스 동일가중, 자기 제외) 또는 가격 표에 있는 지수 티커(예: SPY).
     """
     rets = prices.pct_change(fill_method=None).iloc[1:]
     stock = rets.reindex(columns=tickers)
     enough = (stock.notna().sum() >= min_obs).to_numpy()
-    raw = stock.corr(min_periods=min_obs).to_numpy()
     # 수익률 이력이 부족한 종목은 시장 평균에도 넣지 않는다
     usable = stock.loc[:, enough]
     factor = equal_weight_market(usable) if market == EQUAL_WEIGHT else rets[market]
-    resid = (
-        residualize(usable, factor, min_obs)
-        .reindex(columns=tickers)
-        .corr(min_periods=min_obs)
-        .to_numpy()
-    )
-    return raw, resid, enough
+    resid = residualize(usable, factor, min_obs).reindex(columns=tickers)
+    return stock, resid, enough
+
+
+def correlation_matrices(
+    prices: pd.DataFrame, tickers: list[str], market: str, min_obs: int
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """tickers 순서의 (raw 상관, 잔차 상관, 사용 가능 여부) 행렬 (market은 residual_returns와 같다)."""
+    stock, resid, enough = residual_returns(prices, tickers, market, min_obs)
+    raw = stock.corr(min_periods=min_obs).to_numpy()
+    return raw, resid.corr(min_periods=min_obs).to_numpy(), enough
 
 
 def peer_corr_per_firm(corr: np.ndarray, peers: list[np.ndarray]) -> np.ndarray:
