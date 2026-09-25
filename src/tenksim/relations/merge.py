@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -26,7 +27,7 @@ class RelationTables:
     edges: pd.DataFrame
     edge_evidence: pd.DataFrame
     candidate_status: pd.Series
-    """pair_key → accepted / uncertain / rejected / pending / similar."""
+    """pair_key → accepted / uncertain / rejected / rejected_by_review / pending / similar."""
 
 
 def unit_frame(
@@ -75,7 +76,8 @@ def build_relations(
     span_text: dict[str, str] | None = None,
 ) -> RelationTables:
     """candidates: pair_key, similarity_pct (graph.db의 candidates).
-    span_text: span_id → 원문. 주면 같은 문장의 반복(Item 1과 1A)과 겹치는 구간을 근거에서 하나로 합친다."""
+    span_text: span_id → 도입문 포함 원문. 주면 같은 문장의 반복(Item 1과 1A)과 겹치는 구간을
+    근거에서 하나로 합친다."""
     uj = unit_frame(units, judgements, threshold)
     edges, evidence = [], []
     sim = candidates.set_index("pair_key")["similarity_pct"].to_dict()
@@ -88,13 +90,16 @@ def build_relations(
                 )  # fmt: skip
                 if chosen.empty:
                     continue
-                chosen = _dedupe(chosen.sort_values(f"s_{r}", ascending=False), span_text)
+                chosen = chosen.sort_values(f"s_{r}", ascending=False)
+                # 시점은 합치기 전의 모든 근거로 정한다 (반복 문장 하나만 '현재'라고 판정됐을 수도 있다)
+                status = edge_status(list(chosen[STATUS_Q]))
+                chosen = _dedupe(chosen, span_text)
                 src, dst = pair_key.split("|")
                 edge_id = f"{r}|{pair_key}"
                 top = chosen.iloc[0]
                 edges.append(
                     {"edge_id": edge_id, "src": src, "dst": dst, "relation": r, "subtype": None,
-                     "directed": 0, "status": edge_status(list(chosen[STATUS_Q])),
+                     "directed": 0, "status": status,
                      "basis": "disclosed", "decision": decision,
                      "validated": int(r in validated), "score": float(top[f"s_{r}"]),
                      "n_evidence": len(chosen), "model_id": top["model_id"],
@@ -124,6 +129,11 @@ def _span_range(span_id: str) -> tuple[str, str, int, int] | None:
         return None
 
 
+def _normalize(text: str) -> str:
+    """반복 문장 비교용: 대소문자·따옴표·글머리표·문장부호 차이는 무시한다."""
+    return " ".join(re.sub(r"[^0-9a-z%]+", " ", text.lower()).split())
+
+
 def _dedupe(chosen: pd.DataFrame, span_text: dict[str, str] | None) -> pd.DataFrame:
     """점수 높은 순으로 보며, 같은 10-K에서 이미 고른 근거와 문장이 같거나 구간이 겹치면 뺀다.
     다른 회사 10-K의 같은 문장은 서로 다른 진술이므로 남긴다."""
@@ -131,7 +141,7 @@ def _dedupe(chosen: pd.DataFrame, span_text: dict[str, str] | None) -> pd.DataFr
         return chosen
     keep, texts, ranges = [], set(), []
     for i, row in enumerate(chosen.itertuples()):
-        text = " ".join((span_text.get(row.span_id) or "").split())
+        text = _normalize(span_text.get(row.span_id) or "")
         rng = _span_range(row.span_id)
         if text and (row.doc_node, text) in texts:
             continue

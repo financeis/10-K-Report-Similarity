@@ -108,7 +108,7 @@ CREATE TABLE candidates (              -- 방향 없는 쌍, node_a < node_b
     mentions_ab INTEGER NOT NULL,      -- A의 10-K가 B를 언급한 횟수
     mentions_ba INTEGER NOT NULL,
     n_spans INTEGER NOT NULL,
-    status TEXT NOT NULL               -- pending / accepted / uncertain / rejected / similar
+    status TEXT NOT NULL               -- pending / accepted / uncertain / rejected / rejected_by_review / similar
 );
 CREATE TABLE candidate_spans (         -- 쌍별 판정 입력 근거 구간
     pair_key TEXT NOT NULL REFERENCES candidates(pair_key),

@@ -39,6 +39,9 @@ def relations(con):
         u: Judgement(u, "fake", "v", scores(score.get(t, 0.05)))
         for u, t in zip(units["unit_id"], units["target_node"], strict=True)
     }
+    for u, t in zip(units["unit_id"], units["target_node"], strict=True):
+        if t == AMZN:  # 같은 쌍에 경쟁 관계도 있다고 두어, 경쟁 관계 화면의 매출 비중을 확인한다
+            judgements[u].answers["competitor"] = {"score": 0.95}
     cands = pd.read_sql("SELECT pair_key, similarity_pct FROM candidates", con)
     tables = build_relations(units, judgements, lambda q: (0.8, 0.3), cands, {"business"})
     return tables, {}
@@ -63,7 +66,7 @@ def review(client, edge_id: str, verdict: str) -> dict:
 def test_node_relations_and_edge_detail(client):
     rels = client.get(f"/api/nodes/{enc(UPS)}/relations").json()
     by_id = {r["edge_id"]: r for r in rels}
-    assert set(by_id) == {BUSINESS, UNCERTAIN}
+    assert set(by_id) == {BUSINESS, UNCERTAIN, f"competitor|{AMZN}|{UPS}"}
     assert by_id[BUSINESS]["other_id"] == AMZN and by_id[BUSINESS]["state"] == "accepted"
     assert by_id[UNCERTAIN]["state"] == "uncertain"
 
@@ -74,9 +77,11 @@ def test_node_relations_and_edge_detail(client):
     assert ev["text"][h["start"] : h["end"]] == "Amazon" and ev["doc_node"] == UPS
     assert e["figures"][0]["value"] == 11.8 and e["figures"][0]["doc_node"] == UPS
     assert e["thresholds"] == {} and len(e["evidence_hash"]) == 16
+    comp = client.get(f"/api/edges/{enc(f'competitor|{AMZN}|{UPS}')}").json()
+    assert comp["figures"] == []  # 매출 비중은 공급·협력 관계에서만
     assert client.get(f"/api/edges/{enc('business|x|y')}").status_code == 404
     home = client.get("/api/nodes").json()
-    assert {n["node_id"]: n["n_relations"] for n in home}[UPS] == 1  # 채택만 센다
+    assert {n["node_id"]: n["n_relations"] for n in home}[UPS] == 2  # 채택만 센다 (불확실 빼고)
 
 
 def test_edge_review_queue_and_saving(client):
@@ -127,17 +132,22 @@ def test_review_state_needs_recheck_when_evidence_changes(tmp_path):
 
 def test_counts_and_candidate_status_follow_human_reviews(client):
     home = {n["node_id"]: n["n_relations"] for n in client.get("/api/nodes").json()}
-    assert (home[AMZN], home[SAMSUNG]) == (1, 0)
+    assert (home[AMZN], home[SAMSUNG]) == (2, 0)
     ok = client.post("/api/review/edges", json=review(client, UNCERTAIN, "accept"))
     assert ok.status_code == 200
     client.post("/api/review/edges", json=review(client, BUSINESS, "reject"))
 
     home = {n["node_id"]: n["n_relations"] for n in client.get("/api/nodes").json()}
-    assert (home[AMZN], home[SAMSUNG]) == (0, 1)  # 거절은 빼고 확인은 센다
+    assert (home[AMZN], home[SAMSUNG]) == (1, 1)  # 거절은 빼고 확인은 센다
 
     pair = client.get(f"/api/candidates/{enc(f'{AMZN}|{UPS}')}").json()
+    assert pair["status"] == "accepted"  # 경쟁 관계는 남아 있다
+    assert {e["edge_id"]: e["state"] for e in pair["edges"]} == {
+        BUSINESS: "rejected", f"competitor|{AMZN}|{UPS}": "accepted",
+    }  # fmt: skip
+    client.post("/api/review/edges", json=review(client, f"competitor|{AMZN}|{UPS}", "reject"))
+    pair = client.get(f"/api/candidates/{enc(f'{AMZN}|{UPS}')}").json()
     assert pair["status"] == "rejected_by_review"
-    assert pair["edges"] == [{"edge_id": BUSINESS, "relation": "business", "state": "rejected"}]
     status = {
         c["pair_key"]: c["status"] for c in client.get(f"/api/nodes/{enc(UPS)}/candidates").json()
     }

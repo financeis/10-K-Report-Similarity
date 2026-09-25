@@ -42,9 +42,12 @@ export function EdgeQueue({ edgeId }: { edgeId: string | null }) {
     return () => window.removeEventListener("keydown", onKey);
   });
 
-  // 고른 관계가 목록에서 보이게 스크롤한다
+  // 고른 관계가 목록에서 보이게 스크롤한다. 좁은 화면에서는 목록이 따로 스크롤되지 않아
+  // 창 전체가 목록으로 끌려 올라가므로 하지 않는다.
   const listRef = useRef<HTMLUListElement>(null);
   useEffect(() => {
+    const pane = listRef.current?.closest(".left");
+    if (!pane || getComputedStyle(pane).overflowY !== "auto" || pane.scrollHeight <= pane.clientHeight) return;
     listRef.current?.querySelector("li.sel")?.scrollIntoView({ block: "nearest" });
   }, [current, list.length]);
 

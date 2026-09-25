@@ -38,6 +38,11 @@ function arc(n: number, center: number, spread: number, radius: number): { x: nu
   });
 }
 
+/** 호의 가장 바깥 줄 반지름. */
+function outer(n: number): number {
+  return radiusFor(n) + (n > 14 ? 70 : 0);
+}
+
 /** 줄당 점 수에 맞춘 반지름. 두 줄이면 한 줄에 절반만 놓인다. */
 function radiusFor(n: number): number {
   const perRow = n > 14 ? Math.ceil(n / 2) : n;
@@ -60,8 +65,9 @@ function layout(relations: NodeRelation[]): Placed[] {
   const spots: Record<RelationType, { x: number; y: number }[]> = {
     competitor: arc(groups.competitor.length, -Math.PI / 2, spread(groups.competitor.length), radiusFor(groups.competitor.length)),
     business: arc(groups.business.length, Math.PI / 2, spread(groups.business.length), radiusFor(groups.business.length)),
+    // 지분 열은 두 호의 가장 바깥 줄(두 줄이면 +70)보다 오른쪽에 둔다
     equity: groups.equity.map((_, i) => ({
-      x: Math.max(radiusFor(groups.competitor.length), radiusFor(groups.business.length)) + 60,
+      x: Math.max(outer(groups.competitor.length), outer(groups.business.length)) + 60,
       y: (i - (groups.equity.length - 1) / 2) * 56,
     })),
   };

@@ -984,3 +984,6 @@ kbd {
 .status.st-uncertain {
   color: var(--warn);
 }
+.status.st-rejected_by_review {
+  text-decoration: line-through;
+}

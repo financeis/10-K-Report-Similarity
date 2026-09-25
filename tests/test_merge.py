@@ -6,7 +6,7 @@ import pandas as pd
 from test_export import export  # noqa: E402  (tests/는 rootdir 기준으로 import)
 
 from tenksim.relations.judge import Judgement
-from tenksim.relations.merge import build_relations, edge_status
+from tenksim.relations.merge import build_relations, candidate_status, edge_status
 
 A, B, C, D = "cik:1", "cik:2", "cik:3", "cik:4"
 
@@ -110,14 +110,34 @@ def test_repeated_or_overlapping_sentences_become_one_evidence():
     text = {
         "s:acc:business:0-50": "Our largest customer, B, was 21% of sales.",
         "s:acc:business:0-80": "Our largest customer, B, was 21% of sales. It buys widgets.",  # 겹침
-        "s:acc:risk_factors:10-60": "Our largest customer, B, was 21%  of sales.",  # 1A에 반복
+        "s:acc:risk_factors:10-60": "•Our largest customer, B, was 21% of sales",  # 1A에 반복
         "s:acc:risk_factors:500-560": "We also license patents to B.",
     }
-    judgements = {u["unit_id"]: judged(u, business=0.9 + i / 100) for i, u in enumerate(units)}
+    judgements = {
+        u["unit_id"]: judged(
+            u, business=0.9 + i / 100, status="current" if i == 0 else "historical"
+        )
+        for i, u in enumerate(units)
+    }
     r = build_relations(
         pd.DataFrame(units), judgements, threshold, CANDIDATES, set(), span_text=text
     )
     ev = r.edge_evidence[r.edge_evidence["edge_id"] == f"business|{A}|{B}"]
     assert list(ev["span_id"]) == ["s:acc:risk_factors:500-560", "s:acc:risk_factors:10-60",
                                    "s:acc:business:0-80"]  # fmt: skip
-    assert r.edges.set_index("edge_id").at[f"business|{A}|{B}", "n_evidence"] == 3
+    edge = r.edges.set_index("edge_id").loc[f"business|{A}|{B}"]
+    assert edge["n_evidence"] == 3
+    assert edge["status"] == "current"  # 합쳐서 빠진 문장(0-50)이 '현재'여도 시점에 반영된다
+
+
+def test_candidate_status_follows_review_state():
+    r = build_relations(pd.DataFrame(UNITS), JUDGED, threshold, CANDIDATES, {"competitor"})
+    edges = r.edges.copy()
+    edges.loc[edges["edge_id"] == f"competitor|{A}|{B}", "review_state"] = "rejected"
+    edges.loc[edges["edge_id"] == f"business|{A}|{B}", "review_state"] = "rejected"
+    edges.loc[edges["edge_id"] == f"equity|{C}|{D}", "review_state"] = "rejected"
+    status = candidate_status(CANDIDATES, pd.DataFrame(UNITS), r.unit_judgements, edges)
+    assert status[f"{A}|{B}"] == "rejected_by_review" and status[f"{C}|{D}"] == "rejected_by_review"
+    edges.loc[edges["edge_id"] == f"business|{A}|{B}", "review_state"] = "accepted"  # 불확실을 확인
+    status = candidate_status(CANDIDATES, pd.DataFrame(UNITS), r.unit_judgements, edges)
+    assert status[f"{A}|{B}"] == "accepted"

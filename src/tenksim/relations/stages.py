@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 
@@ -233,7 +234,12 @@ def relations_from_cache(cfg: Config, con: sqlite3.Connection):
     )
     judgements = {j.unit_id: j for j in run.judgements if j is not None}
     candidates = pd.read_sql("SELECT pair_key, similarity_pct FROM candidates", con)
-    span_text = dict(con.execute("SELECT span_id, text FROM spans"))
+    from .reviews import span_full_text
+
+    span_text = {
+        sid: span_full_text(t, lead)
+        for sid, t, lead in con.execute("SELECT span_id, text, lead_text FROM spans")
+    }
     tables = build_relations(
         units, judgements, rel.judge.threshold, candidates, set(rel.judge.validated),
         span_text=span_text,
@@ -288,7 +294,8 @@ def apply_edge_reviews(cfg: Config, con: sqlite3.Connection, tables) -> dict:
     path = reviews_path(cfg)
     if not path.exists() or tables.edges.empty:
         return {}
-    latest = reviews.latest_edge_reviews(reviews.connect(path))
+    with closing(reviews.connect(path)) as rev:
+        latest = reviews.latest_edge_reviews(rev)
     if not latest:
         return {}
     texts = edge_evidence_texts(con, tables.edge_evidence)

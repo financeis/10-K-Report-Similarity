@@ -315,16 +315,19 @@ function accept(d: EdgeDetail, question: string): number {
   return d.thresholds?.[question]?.[0] ?? 0.8;
 }
 
-/** 관계 점수는 채택 기준을 넘었는데 회사 식별이 불확실한 근거 (없으면 undefined). */
+/** 회사 식별이 불확실한 근거 (없으면 undefined). 관계 점수가 채택 기준을 넘는 근거를 먼저 고른다. */
 function entityDoubt(d: EdgeDetail): EdgeDetail["evidence"][number] | undefined {
-  return d.evidence.find(
-    (ev) => (ev.score ?? 0) >= accept(d, d.relation) && ev.s_is_entity != null && ev.s_is_entity < accept(d, "is_entity"),
-  );
+  const doubtful = d.evidence.filter((ev) => ev.s_is_entity != null && ev.s_is_entity < accept(d, "is_entity"));
+  return doubtful.find((ev) => (ev.score ?? 0) >= accept(d, d.relation)) ?? doubtful[0];
 }
 
 function uncertainReason(d: EdgeDetail, company: string): string {
-  if (entityDoubt(d))
+  const doubt = entityDoubt(d);
+  const relationOk = (d.score ?? 0) >= accept(d, d.relation);
+  if (doubt && relationOk)
     return `관계 점수는 채택 기준(${accept(d, d.relation)})을 넘지만, 문장 속 이름이 정말 ${company}인지(회사 식별 점수)가 불확실해 검수 대기로 남았습니다.`;
+  if (doubt)
+    return `가장 높은 관계 점수(${d.score?.toFixed(2) ?? "–"})가 채택 기준(${accept(d, d.relation)})에 못 미치고, 문장 속 이름이 ${company}인지도 불확실해 검수 대기로 남았습니다.`;
   return `가장 높은 관계 점수(${d.score?.toFixed(2) ?? "–"})가 채택 기준(${accept(d, d.relation)})에 못 미쳐 검수 대기로 남았습니다.`;
 }
 

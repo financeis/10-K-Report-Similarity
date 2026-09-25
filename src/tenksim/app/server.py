@@ -534,6 +534,10 @@ def create_app(graph_db: Path, reviews_db: Path | None = None) -> FastAPI:
     def save_edge_review(body: EdgeReviewIn):
         with rdb() as r, db() as g:
             edge = one(g, "SELECT * FROM edges WHERE edge_id = ?", body.edge_id)
+            if body.verdict not in reviews_mod.EDGE_VERDICTS:
+                raise HTTPException(
+                    422, f"verdict는 {reviews_mod.EDGE_VERDICTS} 중 하나여야 합니다"
+                )
             current = evidence_hash(g, body.edge_id)
             if body.evidence_hash != current:
                 raise HTTPException(
